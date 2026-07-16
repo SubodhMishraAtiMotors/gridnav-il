@@ -3,6 +3,8 @@ import os
 import json
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
@@ -37,8 +39,8 @@ def evaluate_model(model, data_loader, loss_fn, device):
 
     with torch.no_grad():
         for X_batch, Y_batch in data_loader:
-            X_batch = X_batch.to(device)
-            Y_batch = Y_batch.to(device)
+            X_batch = X_batch.to(device, non_blocking=True)
+            Y_batch = Y_batch.to(device, non_blocking=True)
 
             pred = model(X_batch)
             loss = loss_fn(pred, Y_batch)
@@ -48,6 +50,24 @@ def evaluate_model(model, data_loader, loss_fn, device):
             total_samples += batch_size
 
     return total_loss / max(total_samples, 1)
+
+
+def plot_loss_curves(train_losses, val_losses, out_path):
+    epochs = np.arange(len(train_losses))
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, train_losses, label="Train loss")
+    plt.plot(epochs, val_losses, label="Val loss")
+
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE loss on normalized actions")
+    plt.title("CNN policy training loss")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig(out_path, dpi=200)
+    plt.close()
 
 
 def main():
@@ -153,12 +173,12 @@ def main():
         train_loss = total_train_loss / max(total_train_samples, 1)
         val_loss = evaluate_model(model, val_loader, loss_fn, device)
 
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
+        train_losses.append(float(train_loss))
+        val_losses.append(float(val_loss))
 
         if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_epoch = epoch
+            best_val_loss = float(val_loss)
+            best_epoch = int(epoch)
             best_state_dict = {
                 k: v.detach().cpu().clone()
                 for k, v in model.state_dict().items()
@@ -169,6 +189,9 @@ def main():
             f"train loss: {train_loss:.6f} | "
             f"val loss: {val_loss:.6f}"
         )
+
+    if best_state_dict is None:
+        raise RuntimeError("Training failed: no best model state was saved.")
 
     model.load_state_dict(best_state_dict)
 
@@ -202,9 +225,18 @@ def main():
             indent=2,
         )
 
+    plot_path = args.out.replace(".pt", "_loss_curve.png")
+
+    plot_loss_curves(
+        train_losses=train_losses,
+        val_losses=val_losses,
+        out_path=plot_path,
+    )
+
     print()
     print("Saved checkpoint:", args.out)
     print("Saved metrics:", metrics_path)
+    print("Saved loss curve:", plot_path)
     print("Best epoch:", best_epoch)
     print("Best val loss:", best_val_loss)
 
