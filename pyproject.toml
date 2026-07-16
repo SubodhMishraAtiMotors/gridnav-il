@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gridnav-il"
+version = "0.1.0"
+description = "Grid-world imitation learning for robot navigation"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "tqdm",
+    "pyyaml",
+    "scikit-learn",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
