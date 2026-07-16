@@ -61,6 +61,7 @@ class PurePursuitController(BaseNavController):
         nearest_idx = int(np.argmin(distances))
 
         lookahead_idx = len(path) - 1
+
         for i in range(nearest_idx, len(path)):
             dist = np.linalg.norm(path[i] - robot_xy)
             if dist >= self.config.lookahead_distance:
@@ -97,6 +98,48 @@ class PurePursuitController(BaseNavController):
         curvature = 2.0 * dy_body / lookahead_dist_sq
 
         omega = v * curvature
+
+        return clip_control(v, omega, self.limits)
+
+
+class NeuralGridController(BaseNavController):
+    def __init__(
+        self,
+        model,
+        y_mean,
+        y_std,
+        obs_config,
+        limits: ControlLimits,
+        device,
+    ):
+        self.model = model
+        self.model.eval()
+
+        self.y_mean = y_mean.to(device)
+        self.y_std = y_std.to(device)
+
+        self.obs_config = obs_config
+        self.limits = limits
+        self.device = device
+
+    def __call__(self, robot_state: RobotState, nav_context: NavContext) -> ControlCommand:
+        import torch
+        from gridnav_il.observations import extract_local_grid_observation
+
+        obs = extract_local_grid_observation(
+            robot_state=robot_state,
+            nav_context=nav_context,
+            obs_config=self.obs_config,
+        )
+
+        obs_tensor = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            pred_norm = self.model(obs_tensor)[0]
+            pred_action = pred_norm * self.y_std + self.y_mean
+
+        v = float(pred_action[0].detach().cpu().item())
+        omega = float(pred_action[1].detach().cpu().item())
 
         return clip_control(v, omega, self.limits)
 

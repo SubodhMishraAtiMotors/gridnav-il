@@ -235,3 +235,105 @@ def plot_local_observation(obs):
 
     plt.tight_layout()
     plt.show()
+
+
+def plot_expert_vs_nn_rollout(
+    problem,
+    pp_states_np,
+    nn_states_np,
+    title="Pure Pursuit vs Neural Policy",
+    out_path=None,
+):
+    occupancy = problem["occupancy_grid"]
+    path_world = problem["path_world"]
+    start_world = problem["start_world"]
+    goal_world = problem["goal_world"]
+    resolution = problem["resolution"]
+    origin_world = problem["origin_world"]
+
+    height, width = occupancy.shape
+
+    extent = [
+        origin_world[0],
+        origin_world[0] + width * resolution,
+        origin_world[1],
+        origin_world[1] + height * resolution,
+    ]
+
+    plt.figure(figsize=(9, 9))
+
+    plt.imshow(
+        occupancy,
+        cmap="gray_r",
+        extent=extent,
+        origin="lower",
+    )
+
+    plt.plot(
+        path_world[:, 0],
+        path_world[:, 1],
+        linewidth=2.0,
+        label="Dijkstra path",
+    )
+
+    plt.plot(
+        pp_states_np[:, 0],
+        pp_states_np[:, 1],
+        linewidth=2.0,
+        linestyle="--",
+        label="Pure Pursuit rollout",
+    )
+
+    plt.plot(
+        nn_states_np[:, 0],
+        nn_states_np[:, 1],
+        linewidth=2.0,
+        linestyle="-.",
+        label="Neural policy rollout",
+    )
+
+    plt.scatter(
+        start_world[0],
+        start_world[1],
+        marker="o",
+        s=90,
+        label="Start",
+    )
+
+    plt.scatter(
+        goal_world[0],
+        goal_world[1],
+        marker="x",
+        s=120,
+        label="Goal",
+    )
+
+    plt.scatter(
+        pp_states_np[-1, 0],
+        pp_states_np[-1, 1],
+        marker="s",
+        s=70,
+        label="PP final",
+    )
+
+    plt.scatter(
+        nn_states_np[-1, 0],
+        nn_states_np[-1, 1],
+        marker="D",
+        s=70,
+        label="NN final",
+    )
+
+    plt.axis("equal")
+    plt.grid(True, alpha=0.3)
+    plt.xlabel("x [m]")
+    plt.ylabel("y [m]")
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+
+    if out_path is not None:
+        plt.savefig(out_path, dpi=200)
+        plt.close()
+    else:
+        plt.show()
