@@ -174,22 +174,27 @@ def plot_grid_path_and_rollout(
 
 
 def plot_local_observation(obs):
-    traversal_crop = obs[0]
-    cost_to_go_crop = obs[1]
+    num_channels = obs.shape[0]
 
-    crop_size = traversal_crop.shape[0]
+    channel_titles = [
+        "Robot-frame traversal cost",
+        "Robot-frame cost-to-go",
+        "Robot-frame clearance",
+    ]
+
+    crop_size = obs.shape[1]
     robot_row = crop_size // 2
     robot_col = crop_size // 2
 
     arrow_len = crop_size * 0.18
 
-    plt.figure(figsize=(11, 4.5))
+    plt.figure(figsize=(5.5 * num_channels, 4.8))
 
-    for i, (channel, title) in enumerate([
-        (traversal_crop, "Robot-frame traversal cost"),
-        (cost_to_go_crop, "Robot-frame cost-to-go"),
-    ]):
-        plt.subplot(1, 2, i + 1)
+    for i in range(num_channels):
+        channel = obs[i]
+        title = channel_titles[i] if i < len(channel_titles) else f"Channel {i}"
+
+        plt.subplot(1, num_channels, i + 1)
 
         plt.imshow(channel, cmap="viridis", origin="upper")
 

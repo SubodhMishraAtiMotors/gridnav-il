@@ -12,6 +12,14 @@ class LocalObservationConfig:
     normalize_cost: bool = True
     unknown_cost_value: float = 1.0
 
+    include_clearance_channel: bool = True
+    max_clearance_m: float = 2.0
+
+    # Options:
+    #   "local"  = normalize each local crop independently
+    #   "global" = normalize cost-to-go using the full map max finite cost
+    cost_to_go_normalization: str = "local"
+
 
 def normalize_map_crop(crop, unknown_value=1.0):
     crop = crop.astype(np.float32).copy()
@@ -33,6 +41,79 @@ def normalize_map_crop(crop, unknown_value=1.0):
         denom = max(max_value - min_value, 1e-6)
 
         normalized[finite_mask] = (finite_values - min_value) / denom
+
+    return normalized
+
+
+def normalize_cost_to_go_crop_global(
+    cost_to_go_crop,
+    full_cost_to_go,
+    unknown_value=1.0,
+):
+    """
+    Normalize cost-to-go using the global finite maximum of the full map.
+
+    This preserves absolute progress-to-goal information.
+
+    Output convention:
+      0.0 = goal / very close to goal
+      1.0 = far from goal / unknown / unreachable
+    """
+    cost_to_go_crop = cost_to_go_crop.astype(np.float32).copy()
+
+    finite_map_mask = np.isfinite(full_cost_to_go)
+
+    normalized = np.full_like(
+        cost_to_go_crop,
+        fill_value=unknown_value,
+        dtype=np.float32,
+    )
+
+    if not np.any(finite_map_mask):
+        return normalized
+
+    global_max = np.max(full_cost_to_go[finite_map_mask])
+    denom = max(float(global_max), 1e-6)
+
+    finite_crop_mask = np.isfinite(cost_to_go_crop)
+
+    normalized[finite_crop_mask] = np.clip(
+        cost_to_go_crop[finite_crop_mask] / denom,
+        0.0,
+        1.0,
+    )
+
+    return normalized
+
+
+def normalize_clearance_crop(
+    clearance_crop_cells,
+    resolution,
+    max_clearance_m,
+    unknown_value=0.0,
+):
+    """
+    Convert distance-to-obstacle from cells to normalized clearance.
+
+    Output convention:
+      0.0 = obstacle / very unsafe / unknown
+      1.0 = at least max_clearance_m away from obstacle
+    """
+    clearance_m = clearance_crop_cells.astype(np.float32) * resolution
+
+    finite_mask = np.isfinite(clearance_m)
+
+    normalized = np.full_like(
+        clearance_m,
+        fill_value=unknown_value,
+        dtype=np.float32,
+    )
+
+    normalized[finite_mask] = np.clip(
+        clearance_m[finite_mask] / max_clearance_m,
+        0.0,
+        1.0,
+    )
 
     return normalized
 
@@ -74,14 +155,6 @@ def get_robot_frame_offsets(crop_size, resolution):
 
 
 def sample_grid_nearest_vectorized(grid, row_float, col_float, unknown_value):
-    """
-    Vectorized nearest-neighbor sampling from a 2D grid.
-
-    Args:
-        grid: [H, W]
-        row_float: [crop, crop]
-        col_float: [crop, crop]
-    """
     height, width = grid.shape
 
     rows = np.rint(row_float).astype(np.int32)
@@ -113,11 +186,19 @@ def extract_robot_frame_grid_observation(
     """
     Fast vectorized robot-frame local observation.
 
-    Returns:
-        obs: [2, crop_size, crop_size]
+    Convention:
+      - robot is at crop center
+      - image up = robot forward
+      - image left = robot left
 
-        channel 0 = traversal cost
-        channel 1 = cost-to-go
+    Channels:
+      channel 0 = traversal cost
+      channel 1 = cost-to-go
+      channel 2 = clearance, optional
+
+    Cost-to-go normalization:
+      local  = local crop min-max normalization
+      global = full-map max normalization
     """
     crop_size = obs_config.crop_size_cells
     resolution = nav_context.resolution
@@ -165,21 +246,53 @@ def extract_robot_frame_grid_observation(
             unknown_value=obs_config.unknown_cost_value,
         )
 
-        cost_to_go_crop = normalize_map_crop(
-            cost_to_go_crop,
-            unknown_value=obs_config.unknown_cost_value,
-        )
+        if obs_config.cost_to_go_normalization == "local":
+            cost_to_go_crop = normalize_map_crop(
+                cost_to_go_crop,
+                unknown_value=obs_config.unknown_cost_value,
+            )
+
+        elif obs_config.cost_to_go_normalization == "global":
+            cost_to_go_crop = normalize_cost_to_go_crop_global(
+                cost_to_go_crop=cost_to_go_crop,
+                full_cost_to_go=nav_context.cost_to_go,
+                unknown_value=obs_config.unknown_cost_value,
+            )
+
+        else:
+            raise ValueError(
+                "Unknown cost_to_go_normalization: "
+                f"{obs_config.cost_to_go_normalization}. "
+                "Use 'local' or 'global'."
+            )
+
     else:
         traversal_crop[~np.isfinite(traversal_crop)] = obs_config.unknown_cost_value
         cost_to_go_crop[~np.isfinite(cost_to_go_crop)] = obs_config.unknown_cost_value
 
-    obs = np.stack(
-        [
-            traversal_crop,
-            cost_to_go_crop,
-        ],
-        axis=0,
-    ).astype(np.float32)
+    channels = [
+        traversal_crop,
+        cost_to_go_crop,
+    ]
+
+    if obs_config.include_clearance_channel:
+        clearance_crop_cells = sample_grid_nearest_vectorized(
+            grid=nav_context.distance_to_obstacle,
+            row_float=row_float,
+            col_float=col_float,
+            unknown_value=0.0,
+        )
+
+        clearance_crop = normalize_clearance_crop(
+            clearance_crop_cells=clearance_crop_cells,
+            resolution=resolution,
+            max_clearance_m=obs_config.max_clearance_m,
+            unknown_value=0.0,
+        )
+
+        channels.append(clearance_crop)
+
+    obs = np.stack(channels, axis=0).astype(np.float32)
 
     return obs
 

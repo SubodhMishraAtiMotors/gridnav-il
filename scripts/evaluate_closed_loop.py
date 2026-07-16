@@ -42,6 +42,21 @@ def parse_args():
 
     parser.add_argument("--num_plots", type=int, default=10)
 
+    parser.add_argument(
+        "--max_clearance_m",
+        type=float,
+        default=2.0,
+        help="Clearance distance that maps to 1.0 in the clearance channel.",
+    )
+
+    parser.add_argument(
+        "--cost_to_go_normalization",
+        type=str,
+        default="local",
+        choices=["local", "global"],
+        help="How to normalize the cost-to-go channel.",
+    )
+
     return parser.parse_args()
 
 
@@ -74,6 +89,9 @@ def main():
         crop_size_cells=args.crop_size,
         normalize_cost=True,
         unknown_cost_value=1.0,
+        include_clearance_channel=True,
+        max_clearance_m=args.max_clearance_m,
+        cost_to_go_normalization=args.cost_to_go_normalization,
     )
 
     limits = ControlLimits(

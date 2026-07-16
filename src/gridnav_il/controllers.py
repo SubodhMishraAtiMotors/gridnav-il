@@ -18,6 +18,7 @@ class NavContext:
     occupancy_grid: np.ndarray
     traversal_cost: np.ndarray
     cost_to_go: np.ndarray
+    distance_to_obstacle: np.ndarray
     path_world: np.ndarray
     goal_world: np.ndarray
     resolution: float
@@ -184,6 +185,7 @@ def make_nav_context(problem) -> NavContext:
         occupancy_grid=problem["occupancy_grid"],
         traversal_cost=problem["traversal_cost"],
         cost_to_go=problem["cost_to_go"],
+        distance_to_obstacle=problem["distance_to_obstacle"],
         path_world=problem["path_world"],
         goal_world=problem["goal_world"],
         resolution=problem["resolution"],
