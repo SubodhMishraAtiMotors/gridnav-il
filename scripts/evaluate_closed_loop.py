@@ -12,8 +12,10 @@ from gridnav_il.evaluation import (
     run_closed_loop_test_suite,
     summarize_closed_loop_test_suite,
 )
-from gridnav_il.plotting import plot_expert_vs_nn_rollout
-
+from gridnav_il.plotting import (
+    plot_expert_vs_nn_rollout,
+    plot_expert_vs_nn_rollout_on_cost_to_go,
+)
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -132,14 +134,30 @@ def main():
             f"NN success={nn['reached_goal']} collision={nn['has_collision']}"
         )
 
-        out_path = os.path.join(args.out_dir, f"rollout_{i:03d}.png")
+        occupancy_out_path = os.path.join(
+            args.out_dir,
+            f"rollout_{i:03d}_occupancy.png",
+        )
+
+        cost_to_go_out_path = os.path.join(
+            args.out_dir,
+            f"rollout_{i:03d}_cost_to_go.png",
+        )
 
         plot_expert_vs_nn_rollout(
             problem=result["problem"],
             pp_states_np=result["pp_states_np"],
             nn_states_np=result["nn_states_np"],
             title=title,
-            out_path=out_path,
+            out_path=occupancy_out_path,
+        )
+
+        plot_expert_vs_nn_rollout_on_cost_to_go(
+            problem=result["problem"],
+            pp_states_np=result["pp_states_np"],
+            nn_states_np=result["nn_states_np"],
+            title=title + " | Cost-to-go",
+            out_path=cost_to_go_out_path,
         )
 
     print("Saved rollout plots in:", args.out_dir)
