@@ -1,0 +1,16 @@
+name: gridnav-il
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - scipy
+  - matplotlib
+  - tqdm
+  - pyyaml
+  - scikit-learn
+  - pip:
+      - torch
+      - torchvision
+      - torchaudio
