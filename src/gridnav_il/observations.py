@@ -37,16 +37,72 @@ def normalize_map_crop(crop, unknown_value=1.0):
     return normalized
 
 
-def sample_grid_nearest(grid, row_float, col_float, unknown_value):
+_LOCAL_GRID_CACHE = {}
+
+
+def get_robot_frame_offsets(crop_size, resolution):
+    """
+    Precompute local body-frame coordinates for every crop pixel.
+
+    Convention:
+      image up    = robot forward
+      image left  = robot left
+      x_body      = forward
+      y_body      = left
+    """
+    key = (crop_size, float(resolution))
+
+    if key in _LOCAL_GRID_CACHE:
+        return _LOCAL_GRID_CACHE[key]
+
+    assert crop_size % 2 == 0, "Use an even crop size."
+
+    half = crop_size // 2
+
+    rows, cols = np.meshgrid(
+        np.arange(crop_size),
+        np.arange(crop_size),
+        indexing="ij",
+    )
+
+    x_body = (half - rows).astype(np.float32) * resolution
+    y_body = (half - cols).astype(np.float32) * resolution
+
+    _LOCAL_GRID_CACHE[key] = (x_body, y_body)
+
+    return x_body, y_body
+
+
+def sample_grid_nearest_vectorized(grid, row_float, col_float, unknown_value):
+    """
+    Vectorized nearest-neighbor sampling from a 2D grid.
+
+    Args:
+        grid: [H, W]
+        row_float: [crop, crop]
+        col_float: [crop, crop]
+    """
     height, width = grid.shape
 
-    row = int(np.round(row_float))
-    col = int(np.round(col_float))
+    rows = np.rint(row_float).astype(np.int32)
+    cols = np.rint(col_float).astype(np.int32)
 
-    if row < 0 or row >= height or col < 0 or col >= width:
-        return unknown_value
+    valid = (
+        (rows >= 0)
+        & (rows < height)
+        & (cols >= 0)
+        & (cols < width)
+    )
 
-    return grid[row, col]
+    sampled = np.full(
+        row_float.shape,
+        fill_value=unknown_value,
+        dtype=np.float32,
+    )
+
+    sampled[valid] = grid[rows[valid], cols[valid]]
+
+    return sampled
 
 
 def extract_robot_frame_grid_observation(
@@ -55,75 +111,53 @@ def extract_robot_frame_grid_observation(
     obs_config: LocalObservationConfig,
 ):
     """
-    Robot-frame local observation.
+    Fast vectorized robot-frame local observation.
 
-    Convention:
-      - robot is at crop center
-      - image up = robot forward
-      - image left = robot left
-      - channel 0 = traversal cost
-      - channel 1 = cost-to-go
+    Returns:
+        obs: [2, crop_size, crop_size]
+
+        channel 0 = traversal cost
+        channel 1 = cost-to-go
     """
     crop_size = obs_config.crop_size_cells
-    assert crop_size % 2 == 0, "Use an even crop size."
-
-    half = crop_size // 2
     resolution = nav_context.resolution
 
-    traversal_crop = np.full(
-        (crop_size, crop_size),
-        fill_value=np.inf,
-        dtype=np.float32,
-    )
-
-    cost_to_go_crop = np.full(
-        (crop_size, crop_size),
-        fill_value=np.inf,
-        dtype=np.float32,
+    x_body, y_body = get_robot_frame_offsets(
+        crop_size=crop_size,
+        resolution=resolution,
     )
 
     cos_theta = np.cos(robot_state.theta)
     sin_theta = np.sin(robot_state.theta)
 
-    for r in range(crop_size):
-        for c in range(crop_size):
-            # Body frame convention:
-            # x_body = forward
-            # y_body = left
-            #
-            # Image convention:
-            # row decreases upward, col decreases leftward.
-            x_body = (half - r) * resolution
-            y_body = (half - c) * resolution
+    x_world = (
+        robot_state.x
+        + cos_theta * x_body
+        - sin_theta * y_body
+    )
 
-            x_world = (
-                robot_state.x
-                + cos_theta * x_body
-                - sin_theta * y_body
-            )
+    y_world = (
+        robot_state.y
+        + sin_theta * x_body
+        + cos_theta * y_body
+    )
 
-            y_world = (
-                robot_state.y
-                + sin_theta * x_body
-                + cos_theta * y_body
-            )
+    row_float = (y_world - nav_context.origin_world[1]) / resolution
+    col_float = (x_world - nav_context.origin_world[0]) / resolution
 
-            row_float = (y_world - nav_context.origin_world[1]) / resolution
-            col_float = (x_world - nav_context.origin_world[0]) / resolution
+    traversal_crop = sample_grid_nearest_vectorized(
+        grid=nav_context.traversal_cost,
+        row_float=row_float,
+        col_float=col_float,
+        unknown_value=np.inf,
+    )
 
-            traversal_crop[r, c] = sample_grid_nearest(
-                grid=nav_context.traversal_cost,
-                row_float=row_float,
-                col_float=col_float,
-                unknown_value=np.inf,
-            )
-
-            cost_to_go_crop[r, c] = sample_grid_nearest(
-                grid=nav_context.cost_to_go,
-                row_float=row_float,
-                col_float=col_float,
-                unknown_value=np.inf,
-            )
+    cost_to_go_crop = sample_grid_nearest_vectorized(
+        grid=nav_context.cost_to_go,
+        row_float=row_float,
+        col_float=col_float,
+        unknown_value=np.inf,
+    )
 
     if obs_config.normalize_cost:
         traversal_crop = normalize_map_crop(
