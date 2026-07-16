@@ -25,13 +25,18 @@ def create_dataset_from_rollout(
     controls,
     nav_context,
     obs_config,
+    stride=2,
+    x_dtype=np.float16,
 ):
     assert len(states) == len(controls) + 1
 
     observations = []
     actions = []
 
-    for state, cmd in zip(states[:-1], controls):
+    for i in range(0, len(controls), stride):
+        state = states[i]
+        cmd = controls[i]
+
         obs = extract_local_grid_observation(
             robot_state=state,
             nav_context=nav_context,
@@ -40,10 +45,10 @@ def create_dataset_from_rollout(
 
         action = cmd.as_array()
 
-        observations.append(obs)
+        observations.append(obs.astype(x_dtype))
         actions.append(action)
 
-    X = np.stack(observations, axis=0).astype(np.float32)
+    X = np.stack(observations, axis=0).astype(x_dtype)
     Y = np.stack(actions, axis=0).astype(np.float32)
 
     return X, Y
@@ -203,6 +208,8 @@ def generate_one_random_expert_demo(
         controls=controls,
         nav_context=nav_context,
         obs_config=obs_config,
+        stride=2,
+        x_dtype=np.float16,
     )
 
     return {
