@@ -196,8 +196,8 @@ def sample_problem_kwargs(seed=None):
 
     min_separation_cells = int(rng.integers(40, 120))
 
-    max_influence_distance_cells = int(rng.integers(8, 14))
-    obstacle_weight = float(rng.uniform(8.0, 20.0))
+    max_influence_distance_cells = int(rng.integers(5, 12))
+    obstacle_weight = float(rng.uniform(4.0, 12.0))
 
     return dict(
         height=height,
