@@ -28,6 +28,7 @@ def run_one_closed_loop_test(
     pp_config=None,
     limits=None,
     sim_config=None,
+    planner_connectivity: int = 4,
 ):
     if pp_config is None:
         pp_config = PurePursuitConfig()
@@ -39,8 +40,11 @@ def run_one_closed_loop_test(
         sim_config = SimConfig()
 
     problem_kwargs = sample_problem_kwargs(seed=seed)
-    problem = create_valid_planning_problem(**problem_kwargs, seed=seed + 10000)
-
+    problem = create_valid_planning_problem(
+        **problem_kwargs,
+        seed=seed + 10000,
+        planner_connectivity=planner_connectivity,
+    )
     nav_context = make_nav_context(problem)
     start_state = make_start_state_from_problem(problem)
 
@@ -117,6 +121,7 @@ def run_closed_loop_test_suite(
     pp_config=None,
     limits=None,
     sim_config=None,
+    planner_connectivity: int = 4,
     verbose=True,
 ):
     results = []
@@ -134,6 +139,7 @@ def run_closed_loop_test_suite(
             pp_config=pp_config,
             limits=limits,
             sim_config=sim_config,
+            planner_connectivity=planner_connectivity,
         )
 
         results.append(result)
@@ -277,5 +283,5 @@ def get_failure_case_indices(results, controller_name="nn"):
 
                 if ratio > 2.0:
                     cases["wild_route_ratio_gt_2_0"].append(i)
-                    
+
     return cases

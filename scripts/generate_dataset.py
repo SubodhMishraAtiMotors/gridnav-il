@@ -73,6 +73,14 @@ def parse_args():
         help="Remove clearance channel from local observation.",
     )
 
+    parser.add_argument(
+        "--planner_connectivity",
+        type=int,
+        default=4,
+        choices=[4, 8],
+        help="Planner connectivity for Dijkstra and path extraction.",
+    )
+
     return parser.parse_args()
 
 
@@ -121,6 +129,7 @@ def main():
         keep_failed_demos=False,
         require_collision_free=True,
         min_clearance_m=args.min_clearance_m,
+        planner_connectivity=args.planner_connectivity,
         verbose=True,
     )
 

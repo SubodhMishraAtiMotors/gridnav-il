@@ -94,14 +94,15 @@ def sample_start_goal_cells(
 def create_valid_planning_problem(
     height=256,
     width=256,
-    num_rectangles=60,
-    min_rect_size=5,
-    max_rect_size=30,
+    num_rectangles=40,
+    min_rect_size=6,
+    max_rect_size=24,
     min_separation_cells=30,
     resolution=0.1,
     max_influence_distance_cells=8,
     obstacle_weight=8.0,
     seed=None,
+    planner_connectivity: int = 4,
 ):
     rng = np.random.default_rng(seed)
 
@@ -131,6 +132,7 @@ def create_valid_planning_problem(
             occupancy_grid=occupancy,
             goal_cell=goal_cell,
             traversal_cost=traversal_cost,
+            connectivity=planner_connectivity,
         )
 
         path_cells = extract_path_from_cost_to_go(
@@ -138,6 +140,7 @@ def create_valid_planning_problem(
             occupancy_grid=occupancy,
             start_cell=start_cell,
             goal_cell=goal_cell,
+            connectivity=planner_connectivity,
         )
 
         if path_cells is not None and len(path_cells) > 2:

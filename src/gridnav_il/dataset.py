@@ -208,6 +208,7 @@ def generate_one_random_expert_demo(
     keep_failed_demos=False,
     require_collision_free=True,
     min_clearance_m=0.05,
+    planner_connectivity: int = 4,
 ):
     rng = np.random.default_rng(demo_seed)
 
@@ -218,6 +219,7 @@ def generate_one_random_expert_demo(
     problem = create_valid_planning_problem(
         **problem_kwargs,
         seed=int(rng.integers(0, 1_000_000_000)),
+        planner_connectivity=planner_connectivity,
     )
 
     nav_context = make_nav_context(problem)
@@ -300,6 +302,7 @@ def generate_expert_dataset(
     keep_failed_demos=False,
     require_collision_free=True,
     min_clearance_m=0.05,
+    planner_connectivity: int = 4,
     verbose=True,
 ):
     if max_attempts is None:
@@ -324,6 +327,7 @@ def generate_expert_dataset(
             keep_failed_demos=keep_failed_demos,
             require_collision_free=require_collision_free,
             min_clearance_m=min_clearance_m,
+            planner_connectivity=planner_connectivity,
         )
 
         if demo is not None:

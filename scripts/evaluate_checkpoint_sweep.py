@@ -72,6 +72,14 @@ def parse_args():
         help="Remove clearance channel from local observation.",
     )
 
+    parser.add_argument(
+        "--planner_connectivity",
+        type=int,
+        default=4,
+        choices=[4, 8],
+        help="Planner connectivity for Dijkstra and path extraction during evaluation.",
+    )
+
     return parser.parse_args()
 
 
@@ -252,6 +260,7 @@ def main():
             limits=limits,
             sim_config=sim_config,
             verbose=False,
+            planner_connectivity=args.planner_connectivity,
         )
 
         summary = summarize_closed_loop_test_suite(results)
