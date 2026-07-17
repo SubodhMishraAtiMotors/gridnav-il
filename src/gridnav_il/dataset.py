@@ -106,13 +106,47 @@ def compute_min_obstacle_distance_along_rollout(
 
     return np.array(distances_m, dtype=np.float32)
 
+def compute_rollout_path_length(states_np):
+    if len(states_np) < 2:
+        return 0.0
+
+    deltas = states_np[1:, :2] - states_np[:-1, :2]
+    segment_lengths = np.linalg.norm(deltas, axis=1)
+
+    return float(np.sum(segment_lengths))
+
+
+def compute_distance_to_reference_path(states_np, path_world):
+    if path_world is None or len(path_world) == 0:
+        distances = np.full((len(states_np),), np.nan, dtype=np.float32)
+        return distances
+
+    robot_xy = states_np[:, :2]
+
+    # Simple vectorized nearest-point distance to discrete path points.
+    # Shape: [num_states, num_path_points]
+    diff = robot_xy[:, None, :] - path_world[None, :, :]
+    distances = np.linalg.norm(diff, axis=2)
+
+    min_distances = np.min(distances, axis=1)
+
+    return min_distances.astype(np.float32)
 
 def summarize_rollout(problem, states_np, controls_np, sim_config):
-    final_position_error = np.linalg.norm(
-        states_np[-1, :2] - problem["goal_world"]
+    goal_world = problem["goal_world"]
+
+    goal_distances = np.linalg.norm(
+        states_np[:, :2] - goal_world[None, :],
+        axis=1,
     )
 
+    final_position_error = float(goal_distances[-1])
+    min_goal_distance_during_rollout = float(np.min(goal_distances))
+
     reached_goal = final_position_error <= sim_config.goal_position_tol
+    ever_reached_goal_region = (
+        min_goal_distance_during_rollout <= sim_config.goal_position_tol
+    )
 
     has_collision, collision_indices = check_collision_for_states(
         states_np=states_np,
@@ -128,14 +162,40 @@ def summarize_rollout(problem, states_np, controls_np, sim_config):
         origin_world=problem["origin_world"],
     )
 
+    rollout_path_length_m = compute_rollout_path_length(states_np)
+
+    distance_to_path_m = compute_distance_to_reference_path(
+        states_np=states_np,
+        path_world=problem["path_world"],
+    )
+
+    mean_distance_to_path_m = float(np.nanmean(distance_to_path_m))
+    max_distance_to_path_m = float(np.nanmax(distance_to_path_m))
+
+    # Overshoot means:
+    #   The robot came inside the goal tolerance at some point,
+    #   but the rollout did not end successfully there.
+    #
+    # This captures cases where the policy reaches the goal region,
+    # leaves it, loops around, and fails or collides later.
+    overshoot_goal_region = bool(
+        ever_reached_goal_region and not reached_goal
+    )
+
     return {
-        "steps": len(controls_np),
-        "final_position_error": float(final_position_error),
+        "steps": int(len(controls_np)),
+        "final_position_error": final_position_error,
+        "min_goal_distance_during_rollout": min_goal_distance_during_rollout,
         "reached_goal": bool(reached_goal),
+        "ever_reached_goal_region": bool(ever_reached_goal_region),
+        "overshoot_goal_region": bool(overshoot_goal_region),
         "has_collision": bool(has_collision),
         "num_collision_states": int(len(collision_indices)),
         "min_obstacle_distance_m": float(obstacle_distances_m.min()),
         "mean_obstacle_distance_m": float(obstacle_distances_m.mean()),
+        "rollout_path_length_m": float(rollout_path_length_m),
+        "mean_distance_to_dijkstra_path_m": mean_distance_to_path_m,
+        "max_distance_to_dijkstra_path_m": max_distance_to_path_m,
     }
 
 
@@ -267,6 +327,7 @@ def generate_expert_dataset(
         )
 
         if demo is not None:
+            demo["demo_id"] = len(accepted_demos)
             accepted_demos.append(demo)
 
         if verbose and num_attempts % 10 == 0:
@@ -281,8 +342,25 @@ def generate_expert_dataset(
     X = np.concatenate([demo["X"] for demo in accepted_demos], axis=0)
     Y = np.concatenate([demo["Y"] for demo in accepted_demos], axis=0)
 
+    demo_ids = np.concatenate(
+        [
+            np.full(
+                shape=(len(demo["X"]),),
+                fill_value=demo["demo_id"],
+                dtype=np.int32,
+            )
+            for demo in accepted_demos
+        ],
+        axis=0,
+    )
+
     steps_per_demo = np.array(
         [demo["summary"]["steps"] for demo in accepted_demos],
+        dtype=np.float32,
+    )
+
+    samples_per_demo = np.array(
+        [len(demo["X"]) for demo in accepted_demos],
         dtype=np.float32,
     )
 
@@ -304,6 +382,8 @@ def generate_expert_dataset(
         "total_samples": int(len(X)),
         "mean_steps_per_demo": float(np.mean(steps_per_demo)),
         "median_steps_per_demo": float(np.median(steps_per_demo)),
+        "mean_samples_per_demo": float(np.mean(samples_per_demo)),
+        "median_samples_per_demo": float(np.median(samples_per_demo)),
         "mean_final_position_error": float(np.mean(final_errors)),
         "max_final_position_error": float(np.max(final_errors)),
         "mean_min_clearance_m": float(np.mean(min_clearances)),
@@ -313,6 +393,7 @@ def generate_expert_dataset(
     return {
         "X": X,
         "Y": Y,
+        "demo_ids": demo_ids,
         "demos": accepted_demos,
         "stats": stats,
     }

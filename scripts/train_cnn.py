@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 
 from gridnav_il.dataset import GridExpertTorchDataset
 from gridnav_il.models import CNNPolicy
@@ -22,13 +22,67 @@ def parse_args():
     parser.add_argument("--out", type=str, default="checkpoints/cnn_policy.pt")
 
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--train_fraction", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=0)
 
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=8,
+        help="Stop if validation loss does not improve for this many epochs.",
+    )
+
+    parser.add_argument(
+        "--min_delta",
+        type=float,
+        default=1e-5,
+        help="Minimum validation loss improvement required to reset patience.",
+    )
+
     return parser.parse_args()
+
+
+def split_indices_by_demo_ids(demo_ids, train_fraction, seed):
+    rng = np.random.default_rng(seed)
+
+    unique_demo_ids = np.unique(demo_ids)
+    rng.shuffle(unique_demo_ids)
+
+    num_train_demos = int(train_fraction * len(unique_demo_ids))
+    num_train_demos = max(1, min(num_train_demos, len(unique_demo_ids) - 1))
+
+    train_demo_ids = set(unique_demo_ids[:num_train_demos].tolist())
+    val_demo_ids = set(unique_demo_ids[num_train_demos:].tolist())
+
+    train_indices = np.array(
+        [i for i, d in enumerate(demo_ids) if int(d) in train_demo_ids],
+        dtype=np.int64,
+    )
+
+    val_indices = np.array(
+        [i for i, d in enumerate(demo_ids) if int(d) in val_demo_ids],
+        dtype=np.int64,
+    )
+
+    return train_indices, val_indices, train_demo_ids, val_demo_ids
+
+
+def split_indices_random(num_samples, train_fraction, seed):
+    rng = np.random.default_rng(seed)
+
+    indices = np.arange(num_samples)
+    rng.shuffle(indices)
+
+    num_train = int(train_fraction * num_samples)
+    num_train = max(1, min(num_train, num_samples - 1))
+
+    train_indices = indices[:num_train]
+    val_indices = indices[num_train:]
+
+    return train_indices, val_indices
 
 
 def evaluate_model(model, data_loader, loss_fn, device):
@@ -84,8 +138,8 @@ def main():
     X = data["X"]
     Y = data["Y"]
 
-    print("X shape:", X.shape)
-    print("Y shape:", Y.shape)
+    print("X shape:", X.shape, X.dtype)
+    print("Y shape:", Y.shape, Y.dtype)
 
     y_mean = torch.tensor(Y.mean(axis=0), dtype=torch.float32)
     y_std = torch.tensor(Y.std(axis=0) + 1e-6, dtype=torch.float32)
@@ -100,15 +154,42 @@ def main():
         y_std=y_std,
     )
 
-    num_total = len(full_dataset)
-    num_train = int(args.train_fraction * num_total)
-    num_val = num_total - num_train
+    if "demo_ids" in data.files:
+        demo_ids = data["demo_ids"]
 
-    train_dataset, val_dataset = random_split(
-        full_dataset,
-        [num_train, num_val],
-        generator=torch.Generator().manual_seed(args.seed),
-    )
+        (
+            train_indices,
+            val_indices,
+            train_demo_ids,
+            val_demo_ids,
+        ) = split_indices_by_demo_ids(
+            demo_ids=demo_ids,
+            train_fraction=args.train_fraction,
+            seed=args.seed,
+        )
+
+        split_type = "demo_id"
+
+        print("Using demo-level train/val split.")
+        print("Train demos:", len(train_demo_ids))
+        print("Val demos:", len(val_demo_ids))
+
+    else:
+        train_indices, val_indices = split_indices_random(
+            num_samples=len(full_dataset),
+            train_fraction=args.train_fraction,
+            seed=args.seed,
+        )
+
+        split_type = "random_frame"
+
+        print("WARNING: demo_ids not found. Using random frame-level split.")
+
+    print("Train samples:", len(train_indices))
+    print("Val samples:", len(val_indices))
+
+    train_dataset = Subset(full_dataset, train_indices.tolist())
+    val_dataset = Subset(full_dataset, val_indices.tolist())
 
     train_loader = DataLoader(
         train_dataset,
@@ -148,6 +229,7 @@ def main():
     best_val_loss = float("inf")
     best_state_dict = None
     best_epoch = None
+    epochs_without_improvement = 0
 
     for epoch in range(args.epochs):
         model.train()
@@ -176,19 +258,34 @@ def main():
         train_losses.append(float(train_loss))
         val_losses.append(float(val_loss))
 
-        if val_loss < best_val_loss:
+        improved = val_loss < (best_val_loss - args.min_delta)
+
+        if improved:
             best_val_loss = float(val_loss)
             best_epoch = int(epoch)
             best_state_dict = {
                 k: v.detach().cpu().clone()
                 for k, v in model.state_dict().items()
             }
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
 
         print(
             f"Epoch {epoch:03d} | "
             f"train loss: {train_loss:.6f} | "
-            f"val loss: {val_loss:.6f}"
+            f"val loss: {val_loss:.6f} | "
+            f"best val: {best_val_loss:.6f} | "
+            f"patience: {epochs_without_improvement}/{args.early_stopping_patience}"
         )
+
+        if epochs_without_improvement >= args.early_stopping_patience:
+            print()
+            print(
+                "Early stopping triggered at epoch "
+                f"{epoch}. Best epoch was {best_epoch}."
+            )
+            break
 
     if best_state_dict is None:
         raise RuntimeError("Training failed: no best model state was saved.")
@@ -205,6 +302,7 @@ def main():
         "val_losses": val_losses,
         "best_epoch": best_epoch,
         "best_val_loss": best_val_loss,
+        "split_type": split_type,
         "args": vars(args),
     }
 
@@ -218,6 +316,9 @@ def main():
                 "val_losses": val_losses,
                 "best_epoch": best_epoch,
                 "best_val_loss": best_val_loss,
+                "split_type": split_type,
+                "num_train_samples": int(len(train_indices)),
+                "num_val_samples": int(len(val_indices)),
                 "y_mean": y_mean.tolist(),
                 "y_std": y_std.tolist(),
             },
@@ -237,6 +338,7 @@ def main():
     print("Saved checkpoint:", args.out)
     print("Saved metrics:", metrics_path)
     print("Saved loss curve:", plot_path)
+    print("Split type:", split_type)
     print("Best epoch:", best_epoch)
     print("Best val loss:", best_val_loss)
 

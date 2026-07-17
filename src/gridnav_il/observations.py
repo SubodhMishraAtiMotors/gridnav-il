@@ -15,6 +15,9 @@ class LocalObservationConfig:
     include_clearance_channel: bool = True
     max_clearance_m: float = 2.0
 
+    include_goal_mask_channel: bool = True
+    goal_mask_sigma_cells: float = 2.0
+
     # Options:
     #   "local"  = normalize each local crop independently
     #   "global" = normalize cost-to-go using the full map max finite cost
@@ -50,15 +53,6 @@ def normalize_cost_to_go_crop_global(
     full_cost_to_go,
     unknown_value=1.0,
 ):
-    """
-    Normalize cost-to-go using the global finite maximum of the full map.
-
-    This preserves absolute progress-to-goal information.
-
-    Output convention:
-      0.0 = goal / very close to goal
-      1.0 = far from goal / unknown / unreachable
-    """
     cost_to_go_crop = cost_to_go_crop.astype(np.float32).copy()
 
     finite_map_mask = np.isfinite(full_cost_to_go)
@@ -178,6 +172,66 @@ def sample_grid_nearest_vectorized(grid, row_float, col_float, unknown_value):
     return sampled
 
 
+def compute_goal_mask(
+    robot_state: RobotState,
+    nav_context: NavContext,
+    crop_size: int,
+    resolution: float,
+    sigma_cells: float,
+):
+    """
+    Create a robot-frame Gaussian goal mask.
+
+    Output:
+      [crop_size, crop_size]
+
+    Convention:
+      goal inside local crop  -> Gaussian blob
+      goal outside local crop -> all zeros
+    """
+    half = crop_size // 2
+
+    dx_world = nav_context.goal_world[0] - robot_state.x
+    dy_world = nav_context.goal_world[1] - robot_state.y
+
+    cos_theta = np.cos(robot_state.theta)
+    sin_theta = np.sin(robot_state.theta)
+
+    # World to robot/body frame.
+    # x_body = forward
+    # y_body = left
+    goal_x_body = cos_theta * dx_world + sin_theta * dy_world
+    goal_y_body = -sin_theta * dx_world + cos_theta * dy_world
+
+    # Body frame to image coordinates.
+    # x_body positive forward -> row decreases.
+    # y_body positive left    -> col decreases.
+    goal_row = half - goal_x_body / resolution
+    goal_col = half - goal_y_body / resolution
+
+    if (
+        goal_row < 0
+        or goal_row >= crop_size
+        or goal_col < 0
+        or goal_col >= crop_size
+    ):
+        return np.zeros((crop_size, crop_size), dtype=np.float32)
+
+    rows, cols = np.meshgrid(
+        np.arange(crop_size),
+        np.arange(crop_size),
+        indexing="ij",
+    )
+
+    dist_sq = (rows - goal_row) ** 2 + (cols - goal_col) ** 2
+
+    sigma_sq = max(float(sigma_cells) ** 2, 1e-6)
+
+    goal_mask = np.exp(-0.5 * dist_sq / sigma_sq).astype(np.float32)
+
+    return goal_mask
+
+
 def extract_robot_frame_grid_observation(
     robot_state: RobotState,
     nav_context: NavContext,
@@ -195,10 +249,7 @@ def extract_robot_frame_grid_observation(
       channel 0 = traversal cost
       channel 1 = cost-to-go
       channel 2 = clearance, optional
-
-    Cost-to-go normalization:
-      local  = local crop min-max normalization
-      global = full-map max normalization
+      channel 3 = goal mask, optional
     """
     crop_size = obs_config.crop_size_cells
     resolution = nav_context.resolution
@@ -291,6 +342,17 @@ def extract_robot_frame_grid_observation(
         )
 
         channels.append(clearance_crop)
+
+    if obs_config.include_goal_mask_channel:
+        goal_mask = compute_goal_mask(
+            robot_state=robot_state,
+            nav_context=nav_context,
+            crop_size=crop_size,
+            resolution=resolution,
+            sigma_cells=obs_config.goal_mask_sigma_cells,
+        )
+
+        channels.append(goal_mask)
 
     obs = np.stack(channels, axis=0).astype(np.float32)
 

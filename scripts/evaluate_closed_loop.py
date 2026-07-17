@@ -11,6 +11,7 @@ from gridnav_il.models import CNNPolicy
 from gridnav_il.evaluation import (
     run_closed_loop_test_suite,
     summarize_closed_loop_test_suite,
+    get_failure_case_indices,
 )
 from gridnav_il.plotting import (
     plot_expert_vs_nn_rollout,
@@ -57,6 +58,19 @@ def parse_args():
         help="How to normalize the cost-to-go channel.",
     )
 
+    parser.add_argument(
+        "--include_goal_mask",
+        action="store_true",
+        help="Include goal mask as an extra observation channel.",
+    )
+
+    parser.add_argument(
+        "--goal_mask_sigma_cells",
+        type=float,
+        default=2.0,
+        help="Gaussian sigma for the goal mask in pixels/cells.",
+    )
+
     return parser.parse_args()
 
 
@@ -91,6 +105,8 @@ def main():
         unknown_cost_value=1.0,
         include_clearance_channel=True,
         max_clearance_m=args.max_clearance_m,
+        include_goal_mask_channel=args.include_goal_mask,
+        goal_mask_sigma_cells=args.goal_mask_sigma_cells,
         cost_to_go_normalization=args.cost_to_go_normalization,
     )
 
@@ -127,16 +143,30 @@ def main():
 
     summary = summarize_closed_loop_test_suite(results)
 
+    failure_cases = get_failure_case_indices(
+        results=results,
+        controller_name="nn",
+    )
+
     summary_path = os.path.join(args.out_dir, "summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
+
+    failure_cases_path = os.path.join(args.out_dir, "failure_cases.json")
+    with open(failure_cases_path, "w") as f:
+        json.dump(failure_cases, f, indent=2)
 
     print()
     print("Closed-loop summary")
     print("-------------------")
     print(json.dumps(summary, indent=2))
     print()
-    print("Saved summary:", summary_path)
+    print("Saved failure cases:", failure_cases_path)
+    print()
+    print("NN failure case indices")
+    print("-----------------------")
+    for k, v in failure_cases.items():
+        print(f"{k}: {v}")
 
     num_plots = min(args.num_plots, len(results))
 

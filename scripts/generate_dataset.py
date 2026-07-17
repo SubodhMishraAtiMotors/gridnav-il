@@ -48,6 +48,19 @@ def parse_args():
         help="How to normalize the cost-to-go channel.",
     )
 
+    parser.add_argument(
+        "--include_goal_mask",
+        action="store_true",
+        help="Include goal mask as an extra observation channel.",
+    )
+
+    parser.add_argument(
+        "--goal_mask_sigma_cells",
+        type=float,
+        default=2.0,
+        help="Gaussian sigma for the goal mask in pixels/cells.",
+    )
+
     return parser.parse_args()
 
 
@@ -62,6 +75,8 @@ def main():
         unknown_cost_value=1.0,
         include_clearance_channel=True,
         max_clearance_m=args.max_clearance_m,
+        include_goal_mask_channel=args.include_goal_mask,
+        goal_mask_sigma_cells=args.goal_mask_sigma_cells,
         cost_to_go_normalization=args.cost_to_go_normalization,
     )
 
@@ -104,6 +119,7 @@ def main():
         args.out,
         X=X,
         Y=Y,
+        demo_ids=dataset["demo_ids"],
         stats_json=json.dumps(stats),
     )
 
@@ -111,6 +127,8 @@ def main():
     print("Saved dataset:", args.out)
     print("X shape:", X.shape)
     print("Y shape:", Y.shape)
+    print("demo_ids shape:", dataset["demo_ids"].shape)
+    print("num unique demos:", len(np.unique(dataset["demo_ids"])))
     print("Stats:")
     for k, v in stats.items():
         print(f"  {k}: {v}")

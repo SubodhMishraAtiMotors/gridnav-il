@@ -163,21 +163,119 @@ def summarize_closed_loop_test_suite(results):
     summary = {}
 
     for name in ["pp", "nn"]:
-        reached = collect(name, "reached_goal")
-        collision = collect(name, "has_collision")
+        reached = collect(name, "reached_goal").astype(bool)
+        collision = collect(name, "has_collision").astype(bool)
+
         final_error = collect(name, "final_position_error")
+        min_goal_distance = collect(name, "min_goal_distance_during_rollout")
         steps = collect(name, "steps")
         min_clearance = collect(name, "min_obstacle_distance_m")
+        overshoot = collect(name, "overshoot_goal_region").astype(bool)
+
+        success_no_collision = reached & (~collision)
+        success_with_collision = reached & collision
+        failure_with_collision = (~reached) & collision
+        failure_without_collision = (~reached) & (~collision)
+
+        path_length = collect(name, "rollout_path_length_m")
+        mean_dist_to_path = collect(name, "mean_distance_to_dijkstra_path_m")
+        max_dist_to_path = collect(name, "max_distance_to_dijkstra_path_m")
 
         summary[name] = {
             "success_rate": float(np.mean(reached)),
             "collision_rate": float(np.mean(collision)),
+
+            "success_no_collision_rate": float(np.mean(success_no_collision)),
+            "success_with_collision_rate": float(np.mean(success_with_collision)),
+            "failure_with_collision_rate": float(np.mean(failure_with_collision)),
+            "failure_without_collision_rate": float(np.mean(failure_without_collision)),
+
+            "success_no_collision_count": int(np.sum(success_no_collision)),
+            "success_with_collision_count": int(np.sum(success_with_collision)),
+            "failure_with_collision_count": int(np.sum(failure_with_collision)),
+            "failure_without_collision_count": int(np.sum(failure_without_collision)),
+
             "mean_final_position_error": float(np.mean(final_error)),
             "median_final_position_error": float(np.median(final_error)),
+
+            "mean_min_goal_distance_during_rollout": float(np.mean(min_goal_distance)),
+            "median_min_goal_distance_during_rollout": float(np.median(min_goal_distance)),
+            "min_goal_distance_during_rollout": float(np.min(min_goal_distance)),
+
+            "overshoot_goal_region_rate": float(np.mean(overshoot)),
+            "overshoot_goal_region_count": int(np.sum(overshoot)),
+
             "mean_steps": float(np.mean(steps)),
             "median_steps": float(np.median(steps)),
+
             "mean_min_clearance_m": float(np.mean(min_clearance)),
             "min_clearance_m": float(np.min(min_clearance)),
+
+            "mean_rollout_path_length_m": float(np.mean(path_length)),
+            "median_rollout_path_length_m": float(np.median(path_length)),
+            "mean_distance_to_dijkstra_path_m": float(np.mean(mean_dist_to_path)),
+            "median_distance_to_dijkstra_path_m": float(np.median(mean_dist_to_path)),
+            "mean_max_distance_to_dijkstra_path_m": float(np.mean(max_dist_to_path)),
+            "median_max_distance_to_dijkstra_path_m": float(np.median(max_dist_to_path)),
         }
 
+    pp_path_lengths = collect("pp", "rollout_path_length_m")
+    nn_path_lengths = collect("nn", "rollout_path_length_m")
+
+    path_length_ratio = nn_path_lengths / np.maximum(pp_path_lengths, 1e-6)
+
+    summary["nn_vs_pp"] = {
+        "mean_path_length_ratio": float(np.mean(path_length_ratio)),
+        "median_path_length_ratio": float(np.median(path_length_ratio)),
+        "max_path_length_ratio": float(np.max(path_length_ratio)),
+        "num_cases_ratio_gt_1_2": int(np.sum(path_length_ratio > 1.2)),
+        "num_cases_ratio_gt_1_5": int(np.sum(path_length_ratio > 1.5)),
+        "num_cases_ratio_gt_2_0": int(np.sum(path_length_ratio > 2.0)),
+    }
+
     return summary
+
+def get_failure_case_indices(results, controller_name="nn"):
+    cases = {
+        "success_no_collision": [],
+        "success_with_collision": [],
+        "failure_with_collision": [],
+        "failure_without_collision": [],
+        "overshoot_goal_region": [],
+        "long_route_ratio_gt_1_5": [],
+        "wild_route_ratio_gt_2_0": [],
+    }
+
+    for i, result in enumerate(results):
+        summary = result[f"{controller_name}_summary"]
+
+        reached = summary["reached_goal"]
+        collision = summary["has_collision"]
+        overshoot = summary.get("overshoot_goal_region", False)
+
+        if reached and not collision:
+            cases["success_no_collision"].append(i)
+        elif reached and collision:
+            cases["success_with_collision"].append(i)
+        elif (not reached) and collision:
+            cases["failure_with_collision"].append(i)
+        elif (not reached) and (not collision):
+            cases["failure_without_collision"].append(i)
+
+        if overshoot:
+            cases["overshoot_goal_region"].append(i)
+
+        if controller_name == "nn":
+            pp_len = result["pp_summary"].get("rollout_path_length_m", None)
+            nn_len = result["nn_summary"].get("rollout_path_length_m", None)
+
+            if pp_len is not None and nn_len is not None:
+                ratio = nn_len / max(pp_len, 1e-6)
+
+                if ratio > 1.5:
+                    cases["long_route_ratio_gt_1_5"].append(i)
+
+                if ratio > 2.0:
+                    cases["wild_route_ratio_gt_2_0"].append(i)
+                    
+    return cases
