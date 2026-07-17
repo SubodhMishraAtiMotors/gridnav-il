@@ -12,16 +12,14 @@ class LocalObservationConfig:
     normalize_cost: bool = True
     unknown_cost_value: float = 1.0
 
+    include_traversability_channel: bool = True
+
     include_clearance_channel: bool = True
     max_clearance_m: float = 2.0
 
     include_goal_mask_channel: bool = True
     goal_mask_sigma_cells: float = 2.0
 
-    # Options:
-    #   "local"  = normalize each local crop independently
-    #   "global" = normalize cost-to-go using the full map max finite cost
-    #   "none"   = use raw global cost-to-go values without normalization
     cost_to_go_normalization: str = "local"
 
 
@@ -335,10 +333,12 @@ def extract_robot_frame_grid_observation(
         traversal_crop[~np.isfinite(traversal_crop)] = obs_config.unknown_cost_value
         cost_to_go_crop[~np.isfinite(cost_to_go_crop)] = obs_config.unknown_cost_value
 
-    channels = [
-        traversal_crop,
-        cost_to_go_crop,
-    ]
+    channels = []
+
+    if obs_config.include_traversability_channel:
+        channels.append(traversal_crop)
+
+    channels.append(cost_to_go_crop)
 
     if obs_config.include_clearance_channel:
         clearance_crop_cells = sample_grid_nearest_vectorized(

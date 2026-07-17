@@ -60,6 +60,18 @@ def parse_args():
     parser.add_argument("--v_max", type=float, default=1.0)
     parser.add_argument("--omega_max", type=float, default=2.0)
 
+    parser.add_argument(
+        "--no_traversability_channel",
+        action="store_true",
+        help="Remove traversability channel from local observation.",
+    )
+
+    parser.add_argument(
+        "--no_clearance_channel",
+        action="store_true",
+        help="Remove clearance channel from local observation.",
+    )
+
     return parser.parse_args()
 
 
@@ -187,7 +199,8 @@ def main():
         crop_size_cells=args.crop_size,
         normalize_cost=True,
         unknown_cost_value=1.0,
-        include_clearance_channel=True,
+        include_traversability_channel=not args.no_traversability_channel,
+        include_clearance_channel=not args.no_clearance_channel,
         max_clearance_m=args.max_clearance_m,
         include_goal_mask_channel=args.include_goal_mask,
         goal_mask_sigma_cells=args.goal_mask_sigma_cells,
