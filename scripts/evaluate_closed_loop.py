@@ -54,7 +54,7 @@ def parse_args():
         "--cost_to_go_normalization",
         type=str,
         default="local",
-        choices=["local", "global"],
+        choices=["local", "global", "none"],
         help="How to normalize the cost-to-go channel.",
     )
 

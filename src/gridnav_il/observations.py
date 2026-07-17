@@ -21,6 +21,7 @@ class LocalObservationConfig:
     # Options:
     #   "local"  = normalize each local crop independently
     #   "global" = normalize cost-to-go using the full map max finite cost
+    #   "none"   = use raw global cost-to-go values without normalization
     cost_to_go_normalization: str = "local"
 
 
@@ -310,11 +311,24 @@ def extract_robot_frame_grid_observation(
                 unknown_value=obs_config.unknown_cost_value,
             )
 
+        elif obs_config.cost_to_go_normalization == "none":
+            # Use raw global cost-to-go values.
+            # Unknown / unreachable cells are assigned a large finite value.
+            finite_map_mask = np.isfinite(nav_context.cost_to_go)
+
+            if np.any(finite_map_mask):
+                unknown_ctg_value = float(np.max(nav_context.cost_to_go[finite_map_mask]))
+            else:
+                unknown_ctg_value = obs_config.unknown_cost_value
+
+            cost_to_go_crop = cost_to_go_crop.astype(np.float32)
+            cost_to_go_crop[~np.isfinite(cost_to_go_crop)] = unknown_ctg_value
+
         else:
             raise ValueError(
                 "Unknown cost_to_go_normalization: "
                 f"{obs_config.cost_to_go_normalization}. "
-                "Use 'local' or 'global'."
+                "Use 'local', 'global', or 'none'."
             )
 
     else:
