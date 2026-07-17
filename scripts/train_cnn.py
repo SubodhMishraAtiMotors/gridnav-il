@@ -19,7 +19,22 @@ def parse_args():
     )
 
     parser.add_argument("--dataset", type=str, required=True)
-    parser.add_argument("--out", type=str, default="checkpoints/cnn_policy.pt")
+
+    # New preferred output style.
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default="checkpoints/cnn_policy_run",
+        help="Directory where checkpoints, metrics, and plots will be saved.",
+    )
+
+    # Kept for backward compatibility. If supplied, we infer out_dir from this path.
+    parser.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="Deprecated. Use --out_dir instead. If provided, output folder is inferred from this path.",
+    )
 
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=40)
@@ -42,7 +57,28 @@ def parse_args():
         help="Minimum validation loss improvement required to reset patience.",
     )
 
+    parser.add_argument(
+        "--save_every",
+        type=int,
+        default=5,
+        help="Save numbered checkpoints every N epochs. Use 0 to disable periodic checkpoints.",
+    )
+
     return parser.parse_args()
+
+
+def resolve_out_dir(args):
+    if args.out is None:
+        return args.out_dir
+
+    # Backward compatibility:
+    # --out checkpoints/foo.pt -> checkpoints/foo/
+    root, ext = os.path.splitext(args.out)
+
+    if ext == ".pt":
+        return root
+
+    return args.out
 
 
 def split_indices_by_demo_ids(demo_ids, train_fraction, seed):
@@ -106,6 +142,39 @@ def evaluate_model(model, data_loader, loss_fn, device):
     return total_loss / max(total_samples, 1)
 
 
+def save_checkpoint(
+    path,
+    model,
+    y_mean,
+    y_std,
+    input_channels,
+    output_dim,
+    train_losses,
+    val_losses,
+    epoch,
+    best_epoch,
+    best_val_loss,
+    split_type,
+    args,
+):
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "y_mean": y_mean,
+        "y_std": y_std,
+        "input_channels": int(input_channels),
+        "output_dim": int(output_dim),
+        "train_losses": train_losses,
+        "val_losses": val_losses,
+        "epoch": None if epoch is None else int(epoch),
+        "best_epoch": None if best_epoch is None else int(best_epoch),
+        "best_val_loss": None if best_val_loss is None else float(best_val_loss),
+        "split_type": split_type,
+        "args": vars(args),
+    }
+
+    torch.save(checkpoint, path)
+
+
 def plot_loss_curves(train_losses, val_losses, out_path):
     epochs = np.arange(len(train_losses))
 
@@ -127,10 +196,15 @@ def plot_loss_curves(train_losses, val_losses, out_path):
 def main():
     args = parse_args()
 
+    out_dir = resolve_out_dir(args)
+    os.makedirs(out_dir, exist_ok=True)
+
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    config_path = os.path.join(out_dir, "config.json")
+    with open(config_path, "w") as f:
+        json.dump(vars(args), f, indent=2)
 
     print("Loading dataset:", args.dataset)
     data = np.load(args.dataset, allow_pickle=True)
@@ -268,8 +342,44 @@ def main():
                 for k, v in model.state_dict().items()
             }
             epochs_without_improvement = 0
+
+            best_path = os.path.join(out_dir, "best.pt")
+            save_checkpoint(
+                path=best_path,
+                model=model,
+                y_mean=y_mean,
+                y_std=y_std,
+                input_channels=X.shape[1],
+                output_dim=Y.shape[1],
+                train_losses=train_losses,
+                val_losses=val_losses,
+                epoch=epoch,
+                best_epoch=best_epoch,
+                best_val_loss=best_val_loss,
+                split_type=split_type,
+                args=args,
+            )
+
         else:
             epochs_without_improvement += 1
+
+        if args.save_every > 0 and (epoch % args.save_every == 0):
+            epoch_path = os.path.join(out_dir, f"checkpoint_epoch_{epoch:03d}.pt")
+            save_checkpoint(
+                path=epoch_path,
+                model=model,
+                y_mean=y_mean,
+                y_std=y_std,
+                input_channels=X.shape[1],
+                output_dim=Y.shape[1],
+                train_losses=train_losses,
+                val_losses=val_losses,
+                epoch=epoch,
+                best_epoch=best_epoch,
+                best_val_loss=best_val_loss,
+                split_type=split_type,
+                args=args,
+            )
 
         print(
             f"Epoch {epoch:03d} | "
@@ -290,25 +400,45 @@ def main():
     if best_state_dict is None:
         raise RuntimeError("Training failed: no best model state was saved.")
 
+    # Save final model as it exists at stopping.
+    final_path = os.path.join(out_dir, "final.pt")
+    save_checkpoint(
+        path=final_path,
+        model=model,
+        y_mean=y_mean,
+        y_std=y_std,
+        input_channels=X.shape[1],
+        output_dim=Y.shape[1],
+        train_losses=train_losses,
+        val_losses=val_losses,
+        epoch=len(train_losses) - 1,
+        best_epoch=best_epoch,
+        best_val_loss=best_val_loss,
+        split_type=split_type,
+        args=args,
+    )
+
+    # Restore and save best again explicitly.
     model.load_state_dict(best_state_dict)
 
-    checkpoint = {
-        "model_state_dict": model.state_dict(),
-        "y_mean": y_mean,
-        "y_std": y_std,
-        "input_channels": int(X.shape[1]),
-        "output_dim": int(Y.shape[1]),
-        "train_losses": train_losses,
-        "val_losses": val_losses,
-        "best_epoch": best_epoch,
-        "best_val_loss": best_val_loss,
-        "split_type": split_type,
-        "args": vars(args),
-    }
+    best_path = os.path.join(out_dir, "best.pt")
+    save_checkpoint(
+        path=best_path,
+        model=model,
+        y_mean=y_mean,
+        y_std=y_std,
+        input_channels=X.shape[1],
+        output_dim=Y.shape[1],
+        train_losses=train_losses,
+        val_losses=val_losses,
+        epoch=best_epoch,
+        best_epoch=best_epoch,
+        best_val_loss=best_val_loss,
+        split_type=split_type,
+        args=args,
+    )
 
-    torch.save(checkpoint, args.out)
-
-    metrics_path = args.out.replace(".pt", "_metrics.json")
+    metrics_path = os.path.join(out_dir, "metrics.json")
     with open(metrics_path, "w") as f:
         json.dump(
             {
@@ -321,12 +451,15 @@ def main():
                 "num_val_samples": int(len(val_indices)),
                 "y_mean": y_mean.tolist(),
                 "y_std": y_std.tolist(),
+                "out_dir": out_dir,
+                "best_checkpoint": best_path,
+                "final_checkpoint": final_path,
             },
             f,
             indent=2,
         )
 
-    plot_path = args.out.replace(".pt", "_loss_curve.png")
+    plot_path = os.path.join(out_dir, "loss_curve.png")
 
     plot_loss_curves(
         train_losses=train_losses,
@@ -335,9 +468,12 @@ def main():
     )
 
     print()
-    print("Saved checkpoint:", args.out)
+    print("Saved run directory:", out_dir)
+    print("Saved best checkpoint:", best_path)
+    print("Saved final checkpoint:", final_path)
     print("Saved metrics:", metrics_path)
     print("Saved loss curve:", plot_path)
+    print("Saved config:", config_path)
     print("Split type:", split_type)
     print("Best epoch:", best_epoch)
     print("Best val loss:", best_val_loss)
