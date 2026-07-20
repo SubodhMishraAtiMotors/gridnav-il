@@ -80,6 +80,12 @@ def parse_args():
         help="Planner connectivity for Dijkstra and path extraction during evaluation.",
     )
 
+    parser.add_argument(
+        "--include_occupancy_channel",
+        action="store_true",
+        help="Include raw occupancy grid channel in local observation.",
+    )
+
     return parser.parse_args()
 
 
@@ -208,6 +214,7 @@ def main():
         normalize_cost=True,
         unknown_cost_value=1.0,
         include_traversability_channel=not args.no_traversability_channel,
+        include_occupancy_channel=args.include_occupancy_channel,
         include_clearance_channel=not args.no_clearance_channel,
         max_clearance_m=args.max_clearance_m,
         include_goal_mask_channel=args.include_goal_mask,

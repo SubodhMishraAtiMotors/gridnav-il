@@ -13,6 +13,7 @@ class LocalObservationConfig:
     unknown_cost_value: float = 1.0
 
     include_traversability_channel: bool = True
+    include_occupancy_channel: bool = False
 
     include_clearance_channel: bool = True
     max_clearance_m: float = 2.0
@@ -290,6 +291,13 @@ def extract_robot_frame_grid_observation(
         unknown_value=np.inf,
     )
 
+    occupancy_crop = sample_grid_nearest_vectorized(
+        grid=nav_context.occupancy_grid,
+        row_float=row_float,
+        col_float=col_float,
+        unknown_value=1.0,
+    ).astype(np.float32)
+
     if obs_config.normalize_cost:
         traversal_crop = normalize_map_crop(
             traversal_crop,
@@ -337,6 +345,9 @@ def extract_robot_frame_grid_observation(
 
     if obs_config.include_traversability_channel:
         channels.append(traversal_crop)
+
+    if obs_config.include_occupancy_channel:
+        channels.append(occupancy_crop)
 
     channels.append(cost_to_go_crop)
 
