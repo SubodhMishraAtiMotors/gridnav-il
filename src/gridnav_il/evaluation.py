@@ -29,6 +29,11 @@ def run_one_closed_loop_test(
     limits=None,
     sim_config=None,
     planner_connectivity: int = 4,
+    num_waypoints: int = 0,
+    waypoint_tracking_index: int = 0,
+    waypoint_kx: float = 0.8,
+    waypoint_ky: float = 1.5,
+    waypoint_ktheta: float = 0.8,
 ):
     if pp_config is None:
         pp_config = PurePursuitConfig()
@@ -60,6 +65,11 @@ def run_one_closed_loop_test(
         obs_config=obs_config,
         limits=limits,
         device=device,
+        num_waypoints=num_waypoints,
+        waypoint_tracking_index=waypoint_tracking_index,
+        waypoint_kx=waypoint_kx,
+        waypoint_ky=waypoint_ky,
+        waypoint_ktheta=waypoint_ktheta,
     )
 
     pp_states, pp_controls = rollout_nav_controller(
@@ -122,6 +132,11 @@ def run_closed_loop_test_suite(
     limits=None,
     sim_config=None,
     planner_connectivity: int = 4,
+    num_waypoints: int = 0,
+    waypoint_tracking_index: int = 0,
+    waypoint_kx: float = 0.8,
+    waypoint_ky: float = 1.5,
+    waypoint_ktheta: float = 0.8,
     verbose=True,
 ):
     results = []
@@ -140,6 +155,11 @@ def run_closed_loop_test_suite(
             limits=limits,
             sim_config=sim_config,
             planner_connectivity=planner_connectivity,
+            num_waypoints=num_waypoints,
+            waypoint_tracking_index=waypoint_tracking_index,
+            waypoint_kx=waypoint_kx,
+            waypoint_ky=waypoint_ky,
+            waypoint_ktheta=waypoint_ktheta,
         )
 
         results.append(result)
