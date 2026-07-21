@@ -13,12 +13,16 @@ class LocalObservationConfig:
     unknown_cost_value: float = 1.0
 
     include_traversability_channel: bool = True
+    include_occupancy_channel: bool = False
 
     include_clearance_channel: bool = True
     max_clearance_m: float = 2.0
 
     include_goal_mask_channel: bool = True
     goal_mask_sigma_cells: float = 2.0
+
+    include_cost_to_go_encoding: bool = False
+    cost_encoding_frequencies: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
 
     cost_to_go_normalization: str = "local"
 
@@ -230,6 +234,31 @@ def compute_goal_mask(
 
     return goal_mask
 
+def compute_cost_to_go_encoding(
+    cost_to_go_crop: np.ndarray,
+    frequencies: tuple[float, ...],
+) -> list[np.ndarray]:
+    """
+    Encode normalized cost-to-go using sinusoidal channels.
+
+    Assumes cost_to_go_crop is already finite and normalized, typically in [0, 1].
+    Returns channels:
+        sin(2*pi*f*c), cos(2*pi*f*c) for each frequency f.
+    """
+    c = cost_to_go_crop.astype(np.float32)
+
+    # Keep encoding bounded and well-behaved.
+    c = np.nan_to_num(c, nan=1.0, posinf=1.0, neginf=1.0)
+    c = np.clip(c, 0.0, 1.0)
+
+    encoded_channels = []
+
+    for frequency in frequencies:
+        phase = 2.0 * np.pi * float(frequency) * c
+        encoded_channels.append(np.sin(phase).astype(np.float32))
+        encoded_channels.append(np.cos(phase).astype(np.float32))
+
+    return encoded_channels
 
 def extract_robot_frame_grid_observation(
     robot_state: RobotState,
@@ -290,6 +319,13 @@ def extract_robot_frame_grid_observation(
         unknown_value=np.inf,
     )
 
+    occupancy_crop = sample_grid_nearest_vectorized(
+        grid=nav_context.occupancy_grid,
+        row_float=row_float,
+        col_float=col_float,
+        unknown_value=1.0,
+    ).astype(np.float32)
+
     if obs_config.normalize_cost:
         traversal_crop = normalize_map_crop(
             traversal_crop,
@@ -338,7 +374,18 @@ def extract_robot_frame_grid_observation(
     if obs_config.include_traversability_channel:
         channels.append(traversal_crop)
 
+    if obs_config.include_occupancy_channel:
+        channels.append(occupancy_crop)
+
+    # Always keep the raw scalar cost-to-go channel.
     channels.append(cost_to_go_crop)
+
+    if obs_config.include_cost_to_go_encoding:
+        encoded_cost_channels = compute_cost_to_go_encoding(
+            cost_to_go_crop=cost_to_go_crop,
+            frequencies=obs_config.cost_encoding_frequencies,
+        )
+        channels.extend(encoded_cost_channels)
 
     if obs_config.include_clearance_channel:
         clearance_crop_cells = sample_grid_nearest_vectorized(
