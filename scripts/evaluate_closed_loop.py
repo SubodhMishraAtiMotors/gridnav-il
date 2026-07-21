@@ -44,6 +44,16 @@ def parse_args():
     parser.add_argument("--num_plots", type=int, default=10)
 
     parser.add_argument(
+        "--waypoint_plot_stride",
+        type=int,
+        default=25,
+        help=(
+            "Draw predicted waypoint chains every N NN control steps. "
+            "Use 1 to draw at every timestep, but plots may become cluttered."
+        ),
+    )
+
+    parser.add_argument(
         "--max_clearance_m",
         type=float,
         default=2.0,
@@ -304,6 +314,8 @@ def main():
             nn_states_np=result["nn_states_np"],
             title=title,
             out_path=occupancy_out_path,
+            nn_predicted_waypoints_world=result.get("nn_predicted_waypoints_world", None),
+            waypoint_draw_stride=args.waypoint_plot_stride,
         )
 
         plot_expert_vs_nn_rollout_on_cost_to_go(
@@ -312,6 +324,8 @@ def main():
             nn_states_np=result["nn_states_np"],
             title=title + " | Cost-to-go",
             out_path=cost_to_go_out_path,
+            nn_predicted_waypoints_world=result.get("nn_predicted_waypoints_world", None),
+            waypoint_draw_stride=args.waypoint_plot_stride,
         )
 
     print("Saved rollout plots in:", args.out_dir)

@@ -86,6 +86,12 @@ def run_one_closed_loop_test(
         sim_config=sim_config,
     )
 
+    nn_predicted_waypoints_world = getattr(
+        nn_controller,
+        "predicted_waypoints_world_history",
+        None,
+    )
+
     pp_states_np = states_to_array(pp_states)
     pp_controls_np = controls_to_array(pp_controls)
 
@@ -115,6 +121,7 @@ def run_one_closed_loop_test(
         "pp_controls_np": pp_controls_np,
         "nn_states_np": nn_states_np,
         "nn_controls_np": nn_controls_np,
+        "nn_predicted_waypoints_world": nn_predicted_waypoints_world,
         "pp_summary": pp_summary,
         "nn_summary": nn_summary,
     }

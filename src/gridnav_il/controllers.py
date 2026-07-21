@@ -135,6 +135,10 @@ class NeuralGridController(BaseNavController):
         self.waypoint_ky = float(waypoint_ky)
         self.waypoint_ktheta = float(waypoint_ktheta)
 
+        self.predicted_waypoints_world_history = []
+        self.last_predicted_waypoints_robot = None
+        self.last_predicted_waypoints_world = None
+
         if self.num_waypoints < 0:
             raise ValueError("num_waypoints must be >= 0.")
 
@@ -154,6 +158,40 @@ class NeuralGridController(BaseNavController):
                     f"Got waypoint_tracking_index={self.waypoint_tracking_index}, "
                     f"num_waypoints={self.num_waypoints}."
                 )
+
+    def _robot_waypoints_to_world(self, robot_waypoints, current_state):
+        """
+        Convert predicted waypoints from current robot frame to world frame.
+
+        robot_waypoints shape:
+            (num_waypoints, 4)
+
+        Each row:
+            [x_robot, y_robot, sin(theta_robot), cos(theta_robot)]
+
+        Output shape:
+            (num_waypoints, 3)
+
+        Each row:
+            [x_world, y_world, theta_world]
+        """
+        c = float(np.cos(current_state.theta))
+        s = float(np.sin(current_state.theta))
+
+        world_waypoints = []
+
+        for wp in robot_waypoints:
+            x_robot = float(wp[0])
+            y_robot = float(wp[1])
+            theta_robot = float(np.arctan2(float(wp[2]), float(wp[3])))
+
+            x_world = current_state.x + c * x_robot - s * y_robot
+            y_world = current_state.y + s * x_robot + c * y_robot
+            theta_world = current_state.theta + theta_robot
+
+            world_waypoints.append([x_world, y_world, theta_world])
+
+        return np.asarray(world_waypoints, dtype=np.float32)
 
     def _waypoints_to_control(self, pred_waypoints) -> ControlCommand:
         """
@@ -238,6 +276,18 @@ class NeuralGridController(BaseNavController):
         pred_np = pred.detach().cpu().numpy().astype(np.float32)
 
         if self.num_waypoints > 0:
+            robot_waypoints = pred_np.reshape(self.num_waypoints, 4)
+
+            self.last_predicted_waypoints_robot = robot_waypoints.copy()
+            self.last_predicted_waypoints_world = self._robot_waypoints_to_world(
+                robot_waypoints=robot_waypoints,
+                current_state=robot_state,
+            )
+
+            self.predicted_waypoints_world_history.append(
+                self.last_predicted_waypoints_world.copy()
+            )
+
             return self._waypoints_to_control(pred_np)
 
         if pred_np.shape[0] < 2:

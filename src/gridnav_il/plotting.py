@@ -1,6 +1,64 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+def plot_predicted_waypoints_world(
+    nn_predicted_waypoints_world,
+    waypoint_draw_stride=25,
+    label_prefix="Predicted waypoints",
+):
+    """
+    Overlay predicted waypoint chains on the current matplotlib axes.
+
+    nn_predicted_waypoints_world:
+        list/array of length T
+        each entry has shape (num_waypoints, 3)
+        each waypoint is [x_world, y_world, theta_world]
+    """
+    if nn_predicted_waypoints_world is None:
+        return
+
+    if len(nn_predicted_waypoints_world) == 0:
+        return
+
+    waypoint_draw_stride = max(1, int(waypoint_draw_stride))
+
+    first_chain = True
+    first_tracked = True
+
+    for t in range(0, len(nn_predicted_waypoints_world), waypoint_draw_stride):
+        waypoints = np.asarray(nn_predicted_waypoints_world[t])
+
+        if waypoints.ndim != 2:
+            continue
+
+        if waypoints.shape[0] == 0 or waypoints.shape[1] < 2:
+            continue
+
+        chain_label = label_prefix if first_chain else None
+
+        plt.plot(
+            waypoints[:, 0],
+            waypoints[:, 1],
+            marker=".",
+            markersize=3,
+            linewidth=0.8,
+            alpha=0.35,
+            label=chain_label,
+        )
+
+        tracked_label = "Tracked predicted waypoint" if first_tracked else None
+
+        plt.scatter(
+            waypoints[0, 0],
+            waypoints[0, 1],
+            marker="x",
+            s=30,
+            alpha=0.7,
+            label=tracked_label,
+        )
+
+        first_chain = False
+        first_tracked = False
 
 def plot_grid_path_and_rollout(
     problem,
@@ -249,6 +307,8 @@ def plot_expert_vs_nn_rollout(
     nn_states_np,
     title="Pure Pursuit vs Neural Policy",
     out_path=None,
+    nn_predicted_waypoints_world=None,
+    waypoint_draw_stride=25,
 ):
     occupancy = problem["occupancy_grid"]
     path_world = problem["path_world"]
@@ -296,6 +356,12 @@ def plot_expert_vs_nn_rollout(
         linewidth=2.0,
         linestyle="-.",
         label="Neural policy rollout",
+    )
+
+    plot_predicted_waypoints_world(
+        nn_predicted_waypoints_world=nn_predicted_waypoints_world,
+        waypoint_draw_stride=waypoint_draw_stride,
+        label_prefix="Predicted waypoints",
     )
 
     plt.scatter(
@@ -350,6 +416,8 @@ def plot_expert_vs_nn_rollout_on_cost_to_go(
     nn_states_np,
     title="Pure Pursuit vs Neural Policy on Cost-to-Go",
     out_path=None,
+    nn_predicted_waypoints_world=None,
+    waypoint_draw_stride=25,
 ):
     cost_to_go = problem["cost_to_go"].copy()
     cost_to_go[~np.isfinite(cost_to_go)] = np.nan
@@ -401,6 +469,12 @@ def plot_expert_vs_nn_rollout_on_cost_to_go(
         linewidth=2.0,
         linestyle="-.",
         label="Neural policy rollout",
+    )
+
+    plot_predicted_waypoints_world(
+        nn_predicted_waypoints_world=nn_predicted_waypoints_world,
+        waypoint_draw_stride=waypoint_draw_stride,
+        label_prefix="Predicted waypoints",
     )
 
     plt.scatter(
