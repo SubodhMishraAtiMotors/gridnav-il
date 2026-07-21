@@ -87,6 +87,20 @@ def parse_args():
         help="Include raw occupancy grid channel in local observation.",
     )
 
+    parser.add_argument(
+        "--include_cost_to_go_encoding",
+        action="store_true",
+        help="Add sinusoidal encoding channels for normalized cost-to-go.",
+    )
+
+    parser.add_argument(
+        "--cost_encoding_frequencies",
+        type=float,
+        nargs="+",
+        default=[1.0, 2.0, 4.0, 8.0],
+        help="Frequencies used for sinusoidal cost-to-go encoding.",
+    )
+
     return parser.parse_args()
 
 
@@ -105,6 +119,8 @@ def main():
         max_clearance_m=args.max_clearance_m,
         include_goal_mask_channel=args.include_goal_mask,
         goal_mask_sigma_cells=args.goal_mask_sigma_cells,
+        include_cost_to_go_encoding=args.include_cost_to_go_encoding,
+        cost_encoding_frequencies=tuple(args.cost_encoding_frequencies),
         cost_to_go_normalization=args.cost_to_go_normalization,
     )
 

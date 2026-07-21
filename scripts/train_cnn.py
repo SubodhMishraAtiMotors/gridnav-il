@@ -11,7 +11,30 @@ from torch.utils.data import DataLoader, Subset
 
 from gridnav_il.dataset import GridExpertTorchDataset
 from gridnav_il.models import CNNPolicy
+from torch.utils.data import Dataset, DataLoader, Subset
 
+class GridNavDataset(Dataset):
+    def __init__(self, X, Y, indices, y_mean, y_std):
+        self.X = X
+        self.Y = Y
+        self.indices = np.asarray(indices, dtype=np.int64)
+        self.y_mean = y_mean
+        self.y_std = y_std
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        sample_idx = self.indices[idx]
+
+        # Keep the stored dataset float16 on CPU.
+        # Convert only this sample to float32 for the model.
+        x = torch.from_numpy(self.X[sample_idx].astype(np.float32))
+
+        y = torch.from_numpy(self.Y[sample_idx].astype(np.float32))
+        y = (y - self.y_mean) / self.y_std
+
+        return x, y
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -192,6 +215,30 @@ def plot_loss_curves(train_losses, val_losses, out_path):
     plt.savefig(out_path, dpi=200)
     plt.close()
 
+class IndexedGridExpertTorchDataset(Dataset):
+    def __init__(self, X, Y, indices, y_mean, y_std):
+        self.X = X
+        self.Y = Y
+        self.indices = np.asarray(indices, dtype=np.int64)
+
+        # Keep these as numpy arrays so workers/dataloader do not hold GPU tensors.
+        self.y_mean = y_mean.detach().cpu().numpy().astype(np.float32)
+        self.y_std = y_std.detach().cpu().numpy().astype(np.float32)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        sample_idx = int(self.indices[idx])
+
+        # X is stored as float16 in the dataset.
+        # Convert only this sample to float32.
+        x = self.X[sample_idx].astype(np.float32, copy=False)
+
+        y = self.Y[sample_idx].astype(np.float32, copy=False)
+        y = (y - self.y_mean) / self.y_std
+
+        return torch.from_numpy(x), torch.from_numpy(y)
 
 def main():
     args = parse_args()
@@ -221,12 +268,7 @@ def main():
     print("y_mean:", y_mean)
     print("y_std:", y_std)
 
-    full_dataset = GridExpertTorchDataset(
-        X=X,
-        Y=Y,
-        y_mean=y_mean,
-        y_std=y_std,
-    )
+    num_samples = X.shape[0]
 
     if "demo_ids" in data.files:
         demo_ids = data["demo_ids"]
@@ -250,7 +292,7 @@ def main():
 
     else:
         train_indices, val_indices = split_indices_random(
-            num_samples=len(full_dataset),
+            num_samples=num_samples,
             train_fraction=args.train_fraction,
             seed=args.seed,
         )
@@ -259,17 +301,33 @@ def main():
 
         print("WARNING: demo_ids not found. Using random frame-level split.")
 
+    train_indices = np.asarray(train_indices, dtype=np.int64)
+    val_indices = np.asarray(val_indices, dtype=np.int64)
+
     print("Train samples:", len(train_indices))
     print("Val samples:", len(val_indices))
 
-    train_dataset = Subset(full_dataset, train_indices.tolist())
-    val_dataset = Subset(full_dataset, val_indices.tolist())
+    train_dataset = IndexedGridExpertTorchDataset(
+        X=X,
+        Y=Y,
+        indices=train_indices,
+        y_mean=y_mean,
+        y_std=y_std,
+    )
+
+    val_dataset = IndexedGridExpertTorchDataset(
+        X=X,
+        Y=Y,
+        indices=val_indices,
+        y_mean=y_mean,
+        y_std=y_std,
+    )
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=0,
         pin_memory=True,
     )
 
@@ -277,7 +335,7 @@ def main():
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=0,
         pin_memory=True,
     )
 
