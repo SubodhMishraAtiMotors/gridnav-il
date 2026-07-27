@@ -101,11 +101,55 @@ def parse_args():
         help="Frequencies used for sinusoidal cost-to-go encoding.",
     )
 
+    parser.add_argument(
+        "--num_waypoints",
+        type=int,
+        default=0,
+        help=(
+            "Number of future local waypoints to predict. "
+            "If 0, falls back to direct v, omega prediction."
+        ),
+    )
+
+    parser.add_argument(
+        "--waypoint_stride",
+        type=int,
+        default=5,
+        help=(
+            "Future timestep stride between waypoint targets. "
+            "For dt=0.1 and stride=5, waypoints are spaced by 0.5 seconds."
+        ),
+    )
+
+    parser.add_argument(
+        "--keep_failed_demos",
+        action="store_true",
+        help="Keep expert demos even if the expert does not reach the goal.",
+    )
+
+    parser.add_argument(
+        "--allow_collisions",
+        action="store_true",
+        help="Allow expert demos with collisions to be included in the dataset.",
+    )
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    if args.num_waypoints < 0:
+        raise ValueError("--num_waypoints must be >= 0.")
+
+    if args.num_waypoints == 0:
+        print(
+            "WARNING: --num_waypoints is 0. "
+            "Dataset will use direct v, omega prediction targets."
+        )
+
+    if args.num_waypoints > 0 and args.waypoint_stride <= 0:
+        raise ValueError("--waypoint_stride must be > 0 when --num_waypoints > 0.")
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
@@ -149,10 +193,12 @@ def main():
         obs_config=obs_config,
         base_seed=args.seed,
         max_attempts=args.max_attempts,
-        keep_failed_demos=False,
-        require_collision_free=True,
+        keep_failed_demos=args.keep_failed_demos,
+        require_collision_free=not args.allow_collisions,
         min_clearance_m=args.min_clearance_m,
         planner_connectivity=args.planner_connectivity,
+        num_waypoints=args.num_waypoints,
+        waypoint_stride=args.waypoint_stride,
         verbose=True,
     )
 
@@ -166,6 +212,11 @@ def main():
         Y=Y,
         demo_ids=dataset["demo_ids"],
         stats_json=json.dumps(stats),
+        num_waypoints=np.array(args.num_waypoints, dtype=np.int32),
+        waypoint_stride=np.array(args.waypoint_stride, dtype=np.int32),
+        prediction_type=np.array(
+            "waypoints" if args.num_waypoints > 0 else "vw"
+        ),
     )
 
     print()
