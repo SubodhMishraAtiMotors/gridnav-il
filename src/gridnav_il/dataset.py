@@ -19,6 +19,103 @@ from gridnav_il.controllers import (
 )
 from gridnav_il.observations import extract_local_grid_observation
 
+def wrap_angle(angle):
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def pose_to_array(pose):
+    if hasattr(pose, "as_array"):
+        return pose.as_array().astype(np.float32)
+
+    return np.array(
+        [
+            float(pose.x),
+            float(pose.y),
+            float(pose.theta),
+        ],
+        dtype=np.float32,
+    )
+
+
+def world_pose_to_robot_frame(target_pose, current_pose):
+    """
+    Convert target world pose into current robot frame.
+
+    current_pose: [x, y, theta]
+    target_pose:  [x, y, theta]
+
+    Robot-frame convention:
+        x_local: forward
+        y_local: left
+        theta_local: target heading relative to current robot heading
+    """
+    cx, cy, ctheta = current_pose
+    tx, ty, ttheta = target_pose
+
+    dx = tx - cx
+    dy = ty - cy
+
+    cos_t = np.cos(ctheta)
+    sin_t = np.sin(ctheta)
+
+    x_local = cos_t * dx + sin_t * dy
+    y_local = -sin_t * dx + cos_t * dy
+    theta_local = wrap_angle(ttheta - ctheta)
+
+    return np.array(
+        [
+            x_local,
+            y_local,
+            np.sin(theta_local),
+            np.cos(theta_local),
+        ],
+        dtype=np.float32,
+    )
+
+
+def build_future_waypoint_target(
+    states_np,
+    current_index,
+    num_waypoints,
+    waypoint_stride,
+):
+    """
+    Build flattened future waypoint target from expert rollout states.
+
+    states_np: shape [T, 3], each row [x, y, theta]
+    current_index: current timestep t
+    num_waypoints: number of future waypoints
+    waypoint_stride: future stride in timesteps
+
+    Returns shape [4 * num_waypoints]:
+        wp1_x, wp1_y, wp1_sin_theta, wp1_cos_theta,
+        wp2_x, ...
+    """
+    if num_waypoints <= 0:
+        raise ValueError("num_waypoints must be > 0 for waypoint target generation.")
+
+    if waypoint_stride <= 0:
+        raise ValueError("waypoint_stride must be > 0.")
+
+    current_pose = states_np[current_index]
+    final_index = len(states_np) - 1
+
+    waypoint_targets = []
+
+    for waypoint_idx in range(num_waypoints):
+        future_index = current_index + (waypoint_idx + 1) * waypoint_stride
+        future_index = min(future_index, final_index)
+
+        future_pose = states_np[future_index]
+
+        waypoint_target = world_pose_to_robot_frame(
+            target_pose=future_pose,
+            current_pose=current_pose,
+        )
+
+        waypoint_targets.append(waypoint_target)
+
+    return np.concatenate(waypoint_targets, axis=0).astype(np.float32)
 
 def create_dataset_from_rollout(
     states,
@@ -27,11 +124,27 @@ def create_dataset_from_rollout(
     obs_config,
     stride=2,
     x_dtype=np.float16,
+    num_waypoints=0,
+    waypoint_stride=5,
 ):
     assert len(states) == len(controls) + 1
 
+    if num_waypoints < 0:
+        raise ValueError("num_waypoints must be >= 0.")
+
+    if num_waypoints == 0:
+        print(
+            "WARNING: num_waypoints is 0. "
+            "Falling back to direct v, omega prediction targets."
+        )
+
+    if num_waypoints > 0 and waypoint_stride <= 0:
+        raise ValueError("waypoint_stride must be > 0 when num_waypoints > 0.")
+
     observations = []
-    actions = []
+    targets = []
+
+    states_np = states_to_array(states)
 
     for i in range(0, len(controls), stride):
         state = states[i]
@@ -43,13 +156,21 @@ def create_dataset_from_rollout(
             obs_config=obs_config,
         )
 
-        action = cmd.as_array()
+        if num_waypoints > 0:
+            target = build_future_waypoint_target(
+                states_np=states_np,
+                current_index=i,
+                num_waypoints=num_waypoints,
+                waypoint_stride=waypoint_stride,
+            )
+        else:
+            target = cmd.as_array()
 
         observations.append(obs.astype(x_dtype))
-        actions.append(action)
+        targets.append(target.astype(np.float32))
 
     X = np.stack(observations, axis=0).astype(x_dtype)
-    Y = np.stack(actions, axis=0).astype(np.float32)
+    Y = np.stack(targets, axis=0).astype(np.float32)
 
     return X, Y
 
@@ -209,6 +330,8 @@ def generate_one_random_expert_demo(
     require_collision_free=True,
     min_clearance_m=0.05,
     planner_connectivity: int = 4,
+    num_waypoints: int = 0,
+    waypoint_stride: int = 5,
 ):
     rng = np.random.default_rng(demo_seed)
 
@@ -272,6 +395,8 @@ def generate_one_random_expert_demo(
         obs_config=obs_config,
         stride=2,
         x_dtype=np.float16,
+        num_waypoints=num_waypoints,
+        waypoint_stride=waypoint_stride,
     )
 
     return {
@@ -303,6 +428,8 @@ def generate_expert_dataset(
     require_collision_free=True,
     min_clearance_m=0.05,
     planner_connectivity: int = 4,
+    num_waypoints: int = 0,
+    waypoint_stride: int = 5,
     verbose=True,
 ):
     if max_attempts is None:
@@ -328,6 +455,8 @@ def generate_expert_dataset(
             require_collision_free=require_collision_free,
             min_clearance_m=min_clearance_m,
             planner_connectivity=planner_connectivity,
+            num_waypoints=num_waypoints,
+            waypoint_stride=waypoint_stride,
         )
 
         if demo is not None:
@@ -392,6 +521,10 @@ def generate_expert_dataset(
         "max_final_position_error": float(np.max(final_errors)),
         "mean_min_clearance_m": float(np.mean(min_clearances)),
         "min_clearance_m": float(np.min(min_clearances)),
+        "num_waypoints": int(num_waypoints),
+        "waypoint_stride": int(waypoint_stride),
+        "target_dim": int(Y.shape[1]),
+        "prediction_type": "waypoints" if num_waypoints > 0 else "vw",
     }
 
     return {

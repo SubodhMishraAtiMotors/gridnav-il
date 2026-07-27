@@ -44,6 +44,16 @@ def parse_args():
     parser.add_argument("--num_plots", type=int, default=10)
 
     parser.add_argument(
+        "--waypoint_plot_stride",
+        type=int,
+        default=25,
+        help=(
+            "Draw predicted waypoint chains every N NN control steps. "
+            "Use 1 to draw at every timestep, but plots may become cluttered."
+        ),
+    )
+
+    parser.add_argument(
         "--max_clearance_m",
         type=float,
         default=2.0,
@@ -111,11 +121,67 @@ def parse_args():
         help="Frequencies used for sinusoidal cost-to-go encoding.",
     )
 
+    parser.add_argument(
+        "--num_waypoints",
+        type=int,
+        default=0,
+        help=(
+            "Number of predicted waypoints. "
+            "If 0, use direct v, omega prediction."
+        ),
+    )
+
+    parser.add_argument(
+        "--waypoint_tracking_index",
+        type=int,
+        default=0,
+        help="Which predicted waypoint to track. Usually 0 for the first waypoint.",
+    )
+
+    parser.add_argument(
+        "--waypoint_kx",
+        type=float,
+        default=0.8,
+        help="Forward gain for waypoint tracking controller.",
+    )
+
+    parser.add_argument(
+        "--waypoint_ky",
+        type=float,
+        default=1.5,
+        help="Lateral gain for waypoint tracking controller.",
+    )
+
+    parser.add_argument(
+        "--waypoint_ktheta",
+        type=float,
+        default=0.8,
+        help="Heading gain for waypoint tracking controller.",
+    )
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    if args.num_waypoints < 0:
+        raise ValueError("--num_waypoints must be >= 0.")
+
+    if args.num_waypoints == 0:
+        print(
+            "WARNING: --num_waypoints is 0. "
+            "Closed-loop evaluation will use direct v, omega prediction."
+        )
+
+    if args.num_waypoints > 0:
+        if args.waypoint_tracking_index < 0:
+            raise ValueError("--waypoint_tracking_index must be >= 0.")
+
+        if args.waypoint_tracking_index >= args.num_waypoints:
+            raise ValueError(
+                "--waypoint_tracking_index must be smaller than --num_waypoints."
+            )
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -182,8 +248,13 @@ def main():
         pp_config=pp_config,
         limits=limits,
         sim_config=sim_config,
-        verbose=True,
         planner_connectivity=args.planner_connectivity,
+        num_waypoints=args.num_waypoints,
+        waypoint_tracking_index=args.waypoint_tracking_index,
+        waypoint_kx=args.waypoint_kx,
+        waypoint_ky=args.waypoint_ky,
+        waypoint_ktheta=args.waypoint_ktheta,
+        verbose=True,
     )
 
     summary = summarize_closed_loop_test_suite(results)
@@ -243,6 +314,8 @@ def main():
             nn_states_np=result["nn_states_np"],
             title=title,
             out_path=occupancy_out_path,
+            nn_predicted_waypoints_world=result.get("nn_predicted_waypoints_world", None),
+            waypoint_draw_stride=args.waypoint_plot_stride,
         )
 
         plot_expert_vs_nn_rollout_on_cost_to_go(
@@ -251,6 +324,8 @@ def main():
             nn_states_np=result["nn_states_np"],
             title=title + " | Cost-to-go",
             out_path=cost_to_go_out_path,
+            nn_predicted_waypoints_world=result.get("nn_predicted_waypoints_world", None),
+            waypoint_draw_stride=args.waypoint_plot_stride,
         )
 
     print("Saved rollout plots in:", args.out_dir)

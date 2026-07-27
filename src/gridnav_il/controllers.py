@@ -112,6 +112,11 @@ class NeuralGridController(BaseNavController):
         obs_config,
         limits: ControlLimits,
         device,
+        num_waypoints: int = 0,
+        waypoint_tracking_index: int = 0,
+        waypoint_kx: float = 0.8,
+        waypoint_ky: float = 1.5,
+        waypoint_ktheta: float = 0.8,
     ):
         self.model = model
         self.model.eval()
@@ -122,6 +127,135 @@ class NeuralGridController(BaseNavController):
         self.obs_config = obs_config
         self.limits = limits
         self.device = device
+
+        self.num_waypoints = int(num_waypoints)
+        self.waypoint_tracking_index = int(waypoint_tracking_index)
+
+        self.waypoint_kx = float(waypoint_kx)
+        self.waypoint_ky = float(waypoint_ky)
+        self.waypoint_ktheta = float(waypoint_ktheta)
+
+        self.predicted_waypoints_world_history = []
+        self.last_predicted_waypoints_robot = None
+        self.last_predicted_waypoints_world = None
+
+        if self.num_waypoints < 0:
+            raise ValueError("num_waypoints must be >= 0.")
+
+        if self.num_waypoints == 0:
+            print(
+                "WARNING: NeuralGridController num_waypoints is 0. "
+                "Using direct v, omega prediction."
+            )
+
+        if self.num_waypoints > 0:
+            if self.waypoint_tracking_index < 0:
+                raise ValueError("waypoint_tracking_index must be >= 0.")
+
+            if self.waypoint_tracking_index >= self.num_waypoints:
+                raise ValueError(
+                    "waypoint_tracking_index must be smaller than num_waypoints. "
+                    f"Got waypoint_tracking_index={self.waypoint_tracking_index}, "
+                    f"num_waypoints={self.num_waypoints}."
+                )
+
+    def _robot_waypoints_to_world(self, robot_waypoints, current_state):
+        """
+        Convert predicted waypoints from current robot frame to world frame.
+
+        robot_waypoints shape:
+            (num_waypoints, 4)
+
+        Each row:
+            [x_robot, y_robot, sin(theta_robot), cos(theta_robot)]
+
+        Output shape:
+            (num_waypoints, 3)
+
+        Each row:
+            [x_world, y_world, theta_world]
+        """
+        c = float(np.cos(current_state.theta))
+        s = float(np.sin(current_state.theta))
+
+        world_waypoints = []
+
+        for wp in robot_waypoints:
+            x_robot = float(wp[0])
+            y_robot = float(wp[1])
+            theta_robot = float(np.arctan2(float(wp[2]), float(wp[3])))
+
+            x_world = current_state.x + c * x_robot - s * y_robot
+            y_world = current_state.y + s * x_robot + c * y_robot
+            theta_world = current_state.theta + theta_robot
+
+            world_waypoints.append([x_world, y_world, theta_world])
+
+        return np.asarray(world_waypoints, dtype=np.float32)
+
+    def _waypoints_to_control(self, pred_waypoints) -> ControlCommand:
+        """
+        Convert predicted waypoint sequence into v, omega.
+
+        pred_waypoints is flattened:
+            [x1, y1, sin(theta1), cos(theta1),
+             x2, y2, sin(theta2), cos(theta2),
+             ...]
+
+        The waypoint is expressed in the current robot frame:
+            x: forward
+            y: left
+            theta: heading relative to current robot heading
+        """
+        expected_dim = 4 * self.num_waypoints
+
+        if pred_waypoints.shape[0] != expected_dim:
+            raise ValueError(
+                "Waypoint model output dimension mismatch. "
+                f"Expected {expected_dim}, got {pred_waypoints.shape[0]}."
+            )
+
+        waypoints = pred_waypoints.reshape(self.num_waypoints, 4)
+
+        wp = waypoints[self.waypoint_tracking_index]
+
+        x_target = float(wp[0])
+        y_target = float(wp[1])
+        sin_theta = float(wp[2])
+        cos_theta = float(wp[3])
+
+        theta_target = float(np.arctan2(sin_theta, cos_theta))
+
+        distance = float(np.sqrt(x_target * x_target + y_target * y_target))
+
+        # Direction of the selected waypoint in the robot frame.
+        # x is forward, y is left.
+        heading_error = float(np.arctan2(y_target, max(x_target, 1e-6)))
+
+        # Turn toward the waypoint and also respect the predicted target orientation.
+        omega = (
+            self.waypoint_ky * heading_error
+            + self.waypoint_ktheta * theta_target
+        )
+
+        # Move fast only when the waypoint is in front.
+        # If the waypoint is sideways, turn first and slow down.
+        alignment_scale = max(0.0, float(np.cos(heading_error)))
+
+        # Avoid amplifying tiny waypoint prediction noise.
+        # If the waypoint is very close, slow down.
+        distance_scale = float(np.clip(distance / 0.4, 0.0, 1.0))
+
+        # Speed command.
+        v = self.waypoint_kx * distance
+
+        # Cap speed before applying slowdowns.
+        v = min(v, self.limits.v_max)
+
+        # Apply safety/smoothness slowdowns.
+        v = v * alignment_scale * distance_scale
+
+        return clip_control(v, omega, self.limits)
 
     def __call__(self, robot_state: RobotState, nav_context: NavContext) -> ControlCommand:
         import torch
@@ -137,10 +271,33 @@ class NeuralGridController(BaseNavController):
 
         with torch.no_grad():
             pred_norm = self.model(obs_tensor)[0]
-            pred_action = pred_norm * self.y_std + self.y_mean
+            pred = pred_norm * self.y_std + self.y_mean
 
-        v = float(pred_action[0].detach().cpu().item())
-        omega = float(pred_action[1].detach().cpu().item())
+        pred_np = pred.detach().cpu().numpy().astype(np.float32)
+
+        if self.num_waypoints > 0:
+            robot_waypoints = pred_np.reshape(self.num_waypoints, 4)
+
+            self.last_predicted_waypoints_robot = robot_waypoints.copy()
+            self.last_predicted_waypoints_world = self._robot_waypoints_to_world(
+                robot_waypoints=robot_waypoints,
+                current_state=robot_state,
+            )
+
+            self.predicted_waypoints_world_history.append(
+                self.last_predicted_waypoints_world.copy()
+            )
+
+            return self._waypoints_to_control(pred_np)
+
+        if pred_np.shape[0] < 2:
+            raise ValueError(
+                "Direct v, omega prediction requires model output dimension >= 2. "
+                f"Got {pred_np.shape[0]}."
+            )
+
+        v = float(pred_np[0])
+        omega = float(pred_np[1])
 
         return clip_control(v, omega, self.limits)
 

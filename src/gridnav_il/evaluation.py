@@ -29,6 +29,11 @@ def run_one_closed_loop_test(
     limits=None,
     sim_config=None,
     planner_connectivity: int = 4,
+    num_waypoints: int = 0,
+    waypoint_tracking_index: int = 0,
+    waypoint_kx: float = 0.8,
+    waypoint_ky: float = 1.5,
+    waypoint_ktheta: float = 0.8,
 ):
     if pp_config is None:
         pp_config = PurePursuitConfig()
@@ -60,6 +65,11 @@ def run_one_closed_loop_test(
         obs_config=obs_config,
         limits=limits,
         device=device,
+        num_waypoints=num_waypoints,
+        waypoint_tracking_index=waypoint_tracking_index,
+        waypoint_kx=waypoint_kx,
+        waypoint_ky=waypoint_ky,
+        waypoint_ktheta=waypoint_ktheta,
     )
 
     pp_states, pp_controls = rollout_nav_controller(
@@ -74,6 +84,12 @@ def run_one_closed_loop_test(
         controller=nn_controller,
         nav_context=nav_context,
         sim_config=sim_config,
+    )
+
+    nn_predicted_waypoints_world = getattr(
+        nn_controller,
+        "predicted_waypoints_world_history",
+        None,
     )
 
     pp_states_np = states_to_array(pp_states)
@@ -105,6 +121,7 @@ def run_one_closed_loop_test(
         "pp_controls_np": pp_controls_np,
         "nn_states_np": nn_states_np,
         "nn_controls_np": nn_controls_np,
+        "nn_predicted_waypoints_world": nn_predicted_waypoints_world,
         "pp_summary": pp_summary,
         "nn_summary": nn_summary,
     }
@@ -122,6 +139,11 @@ def run_closed_loop_test_suite(
     limits=None,
     sim_config=None,
     planner_connectivity: int = 4,
+    num_waypoints: int = 0,
+    waypoint_tracking_index: int = 0,
+    waypoint_kx: float = 0.8,
+    waypoint_ky: float = 1.5,
+    waypoint_ktheta: float = 0.8,
     verbose=True,
 ):
     results = []
@@ -140,6 +162,11 @@ def run_closed_loop_test_suite(
             limits=limits,
             sim_config=sim_config,
             planner_connectivity=planner_connectivity,
+            num_waypoints=num_waypoints,
+            waypoint_tracking_index=waypoint_tracking_index,
+            waypoint_kx=waypoint_kx,
+            waypoint_ky=waypoint_ky,
+            waypoint_ktheta=waypoint_ktheta,
         )
 
         results.append(result)
