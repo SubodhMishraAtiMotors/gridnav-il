@@ -7,7 +7,14 @@ import torch
 from gridnav_il.geometry import ControlLimits, SimConfig
 from gridnav_il.controllers import PurePursuitConfig
 from gridnav_il.observations import LocalObservationConfig
-from gridnav_il.models import CNNPolicy, CNNAttentionPolicy
+
+from gridnav_il.models import (
+    CNNPolicy,
+    CNNAttentionPolicy,
+    WaypointQueryAttentionPolicy,
+    TemporalWaypointQueryAttentionPolicy,
+)
+
 from gridnav_il.evaluation import (
     run_closed_loop_test_suite,
     summarize_closed_loop_test_suite,
@@ -17,6 +24,10 @@ from gridnav_il.plotting import (
     plot_expert_vs_nn_rollout,
     plot_expert_vs_nn_rollout_on_cost_to_go,
 )
+
+def get_sequence_length_from_checkpoint(checkpoint):
+    args = checkpoint.get("args", {})
+    return int(args.get("sequence_length", 1))
 
 def build_model_from_checkpoint(checkpoint):
     model_type = checkpoint.get("model_type", "cnn")
@@ -31,6 +42,19 @@ def build_model_from_checkpoint(checkpoint):
         return CNNAttentionPolicy(
             input_channels=checkpoint["input_channels"],
             output_dim=checkpoint["output_dim"],
+        )
+
+    if model_type == "waypoint_query_attention":
+        return WaypointQueryAttentionPolicy(
+            input_channels=checkpoint["input_channels"],
+            output_dim=checkpoint["output_dim"],
+        )
+
+    if model_type == "temporal_waypoint_query_attention":
+        return TemporalWaypointQueryAttentionPolicy(
+            input_channels=checkpoint["input_channels"],
+            output_dim=checkpoint["output_dim"],
+            sequence_length=get_sequence_length_from_checkpoint(checkpoint),
         )
 
     raise ValueError(f"Unknown model_type in checkpoint: {model_type}")
@@ -214,6 +238,9 @@ def main():
     model = build_model_from_checkpoint(checkpoint).to(device)
     print("Model type:", checkpoint.get("model_type", "cnn"))
 
+    sequence_length = get_sequence_length_from_checkpoint(checkpoint)
+    print("Sequence length:", sequence_length)
+
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
@@ -269,6 +296,7 @@ def main():
         waypoint_kx=args.waypoint_kx,
         waypoint_ky=args.waypoint_ky,
         waypoint_ktheta=args.waypoint_ktheta,
+        sequence_length=sequence_length,
         verbose=True,
     )
 

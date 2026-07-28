@@ -117,6 +117,7 @@ class NeuralGridController(BaseNavController):
         waypoint_kx: float = 0.8,
         waypoint_ky: float = 1.5,
         waypoint_ktheta: float = 0.8,
+        sequence_length: int = 1,
     ):
         self.model = model
         self.model.eval()
@@ -134,6 +135,13 @@ class NeuralGridController(BaseNavController):
         self.waypoint_kx = float(waypoint_kx)
         self.waypoint_ky = float(waypoint_ky)
         self.waypoint_ktheta = float(waypoint_ktheta)
+
+        self.sequence_length = int(sequence_length)
+
+        if self.sequence_length <= 0:
+            raise ValueError("sequence_length must be > 0.")
+
+        self.obs_history = []
 
         self.predicted_waypoints_world_history = []
         self.last_predicted_waypoints_robot = None
@@ -158,6 +166,12 @@ class NeuralGridController(BaseNavController):
                     f"Got waypoint_tracking_index={self.waypoint_tracking_index}, "
                     f"num_waypoints={self.num_waypoints}."
                 )
+
+    def reset(self):
+        self.obs_history = []
+        self.predicted_waypoints_world_history = []
+        self.last_predicted_waypoints_robot = None
+        self.last_predicted_waypoints_world = None
 
     def _robot_waypoints_to_world(self, robot_waypoints, current_state):
         """
@@ -267,7 +281,23 @@ class NeuralGridController(BaseNavController):
             obs_config=self.obs_config,
         )
 
-        obs_tensor = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
+        if self.sequence_length > 1:
+            self.obs_history.append(obs.astype(np.float32, copy=True))
+
+            if len(self.obs_history) > self.sequence_length:
+                self.obs_history = self.obs_history[-self.sequence_length:]
+
+            if len(self.obs_history) < self.sequence_length:
+                pad_count = self.sequence_length - len(self.obs_history)
+                padded_history = [self.obs_history[0]] * pad_count + self.obs_history
+            else:
+                padded_history = self.obs_history
+
+            obs_seq = np.stack(padded_history, axis=0)  # [K, C, H, W]
+            obs_tensor = torch.from_numpy(obs_seq).float().unsqueeze(0).to(self.device)
+
+        else:
+            obs_tensor = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             pred_norm = self.model(obs_tensor)[0]
