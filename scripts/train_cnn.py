@@ -10,7 +10,13 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 
 from gridnav_il.dataset import GridExpertTorchDataset
-from gridnav_il.models import CNNPolicy, CNNAttentionPolicy
+
+from gridnav_il.models import (
+    CNNPolicy,
+    CNNAttentionPolicy,
+    WaypointQueryAttentionPolicy,
+)
+
 from torch.utils.data import Dataset, DataLoader, Subset
 
 class GridNavDataset(Dataset):
@@ -70,7 +76,7 @@ def parse_args():
         "--model_type",
         type=str,
         default="cnn",
-        choices=["cnn", "cnn_attention"],
+        choices=["cnn", "cnn_attention", "waypoint_query_attention"],
         help="Model architecture to train.",
     )
 
@@ -267,6 +273,16 @@ def build_model(model_type, input_channels, output_dim):
             dropout=0.1,
         )
 
+    if model_type == "waypoint_query_attention":
+        return WaypointQueryAttentionPolicy(
+            input_channels=input_channels,
+            output_dim=output_dim,
+            d_model=128,
+            num_heads=4,
+            num_layers=2,
+            dropout=0.1,
+        )
+        
     raise ValueError(f"Unknown model_type: {model_type}")
 
 def main():
