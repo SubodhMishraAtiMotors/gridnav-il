@@ -10,7 +10,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 
 from gridnav_il.dataset import GridExpertTorchDataset
-from gridnav_il.models import CNNPolicy
+from gridnav_il.models import CNNPolicy, CNNAttentionPolicy
 from torch.utils.data import Dataset, DataLoader, Subset
 
 class GridNavDataset(Dataset):
@@ -67,6 +67,14 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument(
+        "--model_type",
+        type=str,
+        default="cnn",
+        choices=["cnn", "cnn_attention"],
+        help="Model architecture to train.",
+    )
+
+    parser.add_argument(
         "--early_stopping_patience",
         type=int,
         default=8,
@@ -86,6 +94,7 @@ def parse_args():
         default=5,
         help="Save numbered checkpoints every N epochs. Use 0 to disable periodic checkpoints.",
     )
+
 
     return parser.parse_args()
 
@@ -186,6 +195,7 @@ def save_checkpoint(
         "y_std": y_std,
         "input_channels": int(input_channels),
         "output_dim": int(output_dim),
+        "model_type": getattr(args, "model_type", "cnn"),
         "train_losses": train_losses,
         "val_losses": val_losses,
         "epoch": None if epoch is None else int(epoch),
@@ -239,6 +249,25 @@ class IndexedGridExpertTorchDataset(Dataset):
         y = (y - self.y_mean) / self.y_std
 
         return torch.from_numpy(x), torch.from_numpy(y)
+
+def build_model(model_type, input_channels, output_dim):
+    if model_type == "cnn":
+        return CNNPolicy(
+            input_channels=input_channels,
+            output_dim=output_dim,
+        )
+
+    if model_type == "cnn_attention":
+        return CNNAttentionPolicy(
+            input_channels=input_channels,
+            output_dim=output_dim,
+            d_model=128,
+            num_heads=4,
+            num_layers=2,
+            dropout=0.1,
+        )
+
+    raise ValueError(f"Unknown model_type: {model_type}")
 
 def main():
     args = parse_args()
@@ -342,10 +371,13 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
-    model = CNNPolicy(
+    model = build_model(
+        model_type=args.model_type,
         input_channels=X.shape[1],
         output_dim=Y.shape[1],
     ).to(device)
+
+    print("Model type:", args.model_type)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),

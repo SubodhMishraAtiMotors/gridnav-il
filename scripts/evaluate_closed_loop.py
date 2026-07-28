@@ -7,7 +7,7 @@ import torch
 from gridnav_il.geometry import ControlLimits, SimConfig
 from gridnav_il.controllers import PurePursuitConfig
 from gridnav_il.observations import LocalObservationConfig
-from gridnav_il.models import CNNPolicy
+from gridnav_il.models import CNNPolicy, CNNAttentionPolicy
 from gridnav_il.evaluation import (
     run_closed_loop_test_suite,
     summarize_closed_loop_test_suite,
@@ -17,6 +17,23 @@ from gridnav_il.plotting import (
     plot_expert_vs_nn_rollout,
     plot_expert_vs_nn_rollout_on_cost_to_go,
 )
+
+def build_model_from_checkpoint(checkpoint):
+    model_type = checkpoint.get("model_type", "cnn")
+
+    if model_type == "cnn":
+        return CNNPolicy(
+            input_channels=checkpoint["input_channels"],
+            output_dim=checkpoint["output_dim"],
+        )
+
+    if model_type == "cnn_attention":
+        return CNNAttentionPolicy(
+            input_channels=checkpoint["input_channels"],
+            output_dim=checkpoint["output_dim"],
+        )
+
+    raise ValueError(f"Unknown model_type in checkpoint: {model_type}")
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -194,10 +211,8 @@ def main():
         weights_only=False,
     )
 
-    model = CNNPolicy(
-        input_channels=checkpoint["input_channels"],
-        output_dim=checkpoint["output_dim"],
-    ).to(device)
+    model = build_model_from_checkpoint(checkpoint).to(device)
+    print("Model type:", checkpoint.get("model_type", "cnn"))
 
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
