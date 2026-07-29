@@ -10,7 +10,14 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 
 from gridnav_il.dataset import GridExpertTorchDataset
-from gridnav_il.models import CNNPolicy, CNNAttentionPolicy
+
+from gridnav_il.models import (
+    CNNPolicy,
+    CNNAttentionPolicy,
+    WaypointQueryAttentionPolicy,
+    TemporalWaypointQueryAttentionPolicy,
+)
+
 from torch.utils.data import Dataset, DataLoader, Subset
 
 class GridNavDataset(Dataset):
@@ -70,7 +77,7 @@ def parse_args():
         "--model_type",
         type=str,
         default="cnn",
-        choices=["cnn", "cnn_attention"],
+        choices=["cnn", "cnn_attention", "waypoint_query_attention", "temporal_waypoint_query_attention"],
         help="Model architecture to train.",
     )
 
@@ -95,6 +102,15 @@ def parse_args():
         help="Save numbered checkpoints every N epochs. Use 0 to disable periodic checkpoints.",
     )
 
+    parser.add_argument(
+        "--sequence_length",
+        type=int,
+        default=1,
+        help=(
+            "Number of observation frames used by temporal models. "
+            "Use 1 for non-temporal models."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -250,7 +266,70 @@ class IndexedGridExpertTorchDataset(Dataset):
 
         return torch.from_numpy(x), torch.from_numpy(y)
 
-def build_model(model_type, input_channels, output_dim):
+class IndexedSequenceGridExpertTorchDataset(Dataset):
+    def __init__(
+        self,
+        X,
+        Y,
+        demo_ids,
+        indices,
+        y_mean,
+        y_std,
+        sequence_length=4,
+    ):
+        self.X = X
+        self.Y = Y
+        self.demo_ids = np.asarray(demo_ids, dtype=np.int64)
+        self.indices = np.asarray(indices, dtype=np.int64)
+        self.sequence_length = int(sequence_length)
+
+        if self.sequence_length <= 0:
+            raise ValueError("sequence_length must be > 0.")
+
+        self.y_mean = y_mean.detach().cpu().numpy().astype(np.float32)
+        self.y_std = y_std.detach().cpu().numpy().astype(np.float32)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def _get_sequence_indices(self, sample_idx):
+        demo_id = self.demo_ids[sample_idx]
+
+        sequence_indices = []
+
+        for offset in range(self.sequence_length - 1, -1, -1):
+            idx = sample_idx - offset
+
+            if idx < 0 or self.demo_ids[idx] != demo_id:
+                idx = sample_idx
+
+                # Better padding: walk forward to earliest valid frame in this demo.
+                # This avoids crossing demo boundaries.
+                while idx > 0 and self.demo_ids[idx - 1] == demo_id:
+                    idx -= 1
+
+            sequence_indices.append(idx)
+
+        return sequence_indices
+
+    def __getitem__(self, idx):
+        sample_idx = int(self.indices[idx])
+
+        sequence_indices = self._get_sequence_indices(sample_idx)
+
+        x_seq = [
+            self.X[i].astype(np.float32, copy=False)
+            for i in sequence_indices
+        ]
+
+        x_seq = np.stack(x_seq, axis=0)  # [K, C, H, W]
+
+        y = self.Y[sample_idx].astype(np.float32, copy=False)
+        y = (y - self.y_mean) / self.y_std
+
+        return torch.from_numpy(x_seq), torch.from_numpy(y)
+
+def build_model(model_type, input_channels, output_dim, sequence_length=1):
     if model_type == "cnn":
         return CNNPolicy(
             input_channels=input_channels,
@@ -267,10 +346,45 @@ def build_model(model_type, input_channels, output_dim):
             dropout=0.1,
         )
 
+    if model_type == "waypoint_query_attention":
+        return WaypointQueryAttentionPolicy(
+            input_channels=input_channels,
+            output_dim=output_dim,
+            d_model=128,
+            num_heads=4,
+            num_layers=2,
+            dropout=0.1,
+        )
+
+    if model_type == "temporal_waypoint_query_attention":
+        return TemporalWaypointQueryAttentionPolicy(
+            input_channels=input_channels,
+            output_dim=output_dim,
+            sequence_length=sequence_length,
+            d_model=128,
+            num_heads=4,
+            spatial_layers=1,
+            temporal_layers=2,
+            dropout=0.1,
+        )
+
     raise ValueError(f"Unknown model_type: {model_type}")
 
 def main():
     args = parse_args()
+
+    if args.sequence_length <= 0:
+        raise ValueError("--sequence_length must be > 0.")
+
+    if args.model_type != "temporal_waypoint_query_attention" and args.sequence_length != 1:
+        raise ValueError(
+            "--sequence_length should be 1 for non-temporal models."
+        )
+
+    if args.model_type == "temporal_waypoint_query_attention" and args.sequence_length <= 1:
+        raise ValueError(
+            "Use --sequence_length > 1 for temporal_waypoint_query_attention."
+        )
 
     out_dir = resolve_out_dir(args)
     os.makedirs(out_dir, exist_ok=True)
@@ -336,21 +450,50 @@ def main():
     print("Train samples:", len(train_indices))
     print("Val samples:", len(val_indices))
 
-    train_dataset = IndexedGridExpertTorchDataset(
-        X=X,
-        Y=Y,
-        indices=train_indices,
-        y_mean=y_mean,
-        y_std=y_std,
-    )
+    if args.model_type == "temporal_waypoint_query_attention":
+        if "demo_ids" not in data.files:
+            raise ValueError(
+                "Temporal training requires demo_ids in the dataset."
+            )
 
-    val_dataset = IndexedGridExpertTorchDataset(
-        X=X,
-        Y=Y,
-        indices=val_indices,
-        y_mean=y_mean,
-        y_std=y_std,
-    )
+        demo_ids = data["demo_ids"]
+
+        train_dataset = IndexedSequenceGridExpertTorchDataset(
+            X=X,
+            Y=Y,
+            demo_ids=demo_ids,
+            indices=train_indices,
+            y_mean=y_mean,
+            y_std=y_std,
+            sequence_length=args.sequence_length,
+        )
+
+        val_dataset = IndexedSequenceGridExpertTorchDataset(
+            X=X,
+            Y=Y,
+            demo_ids=demo_ids,
+            indices=val_indices,
+            y_mean=y_mean,
+            y_std=y_std,
+            sequence_length=args.sequence_length,
+        )
+
+    else:
+        train_dataset = IndexedGridExpertTorchDataset(
+            X=X,
+            Y=Y,
+            indices=train_indices,
+            y_mean=y_mean,
+            y_std=y_std,
+        )
+
+        val_dataset = IndexedGridExpertTorchDataset(
+            X=X,
+            Y=Y,
+            indices=val_indices,
+            y_mean=y_mean,
+            y_std=y_std,
+        )
 
     train_loader = DataLoader(
         train_dataset,
@@ -375,9 +518,11 @@ def main():
         model_type=args.model_type,
         input_channels=X.shape[1],
         output_dim=Y.shape[1],
+        sequence_length=args.sequence_length,
     ).to(device)
 
     print("Model type:", args.model_type)
+    print("Sequence length:", args.sequence_length)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -544,6 +689,8 @@ def main():
                 "out_dir": out_dir,
                 "best_checkpoint": best_path,
                 "final_checkpoint": final_path,
+                "model_type": args.model_type,
+                "sequence_length": int(args.sequence_length),
             },
             f,
             indent=2,

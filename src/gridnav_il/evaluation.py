@@ -34,6 +34,7 @@ def run_one_closed_loop_test(
     waypoint_kx: float = 0.8,
     waypoint_ky: float = 1.5,
     waypoint_ktheta: float = 0.8,
+    sequence_length: int = 1,
 ):
     if pp_config is None:
         pp_config = PurePursuitConfig()
@@ -70,6 +71,7 @@ def run_one_closed_loop_test(
         waypoint_kx=waypoint_kx,
         waypoint_ky=waypoint_ky,
         waypoint_ktheta=waypoint_ktheta,
+        sequence_length=sequence_length,
     )
 
     pp_states, pp_controls = rollout_nav_controller(
@@ -144,6 +146,7 @@ def run_closed_loop_test_suite(
     waypoint_kx: float = 0.8,
     waypoint_ky: float = 1.5,
     waypoint_ktheta: float = 0.8,
+    sequence_length: int = 1,
     verbose=True,
 ):
     results = []
@@ -167,6 +170,7 @@ def run_closed_loop_test_suite(
             waypoint_kx=waypoint_kx,
             waypoint_ky=waypoint_ky,
             waypoint_ktheta=waypoint_ktheta,
+            sequence_length=sequence_length,
         )
 
         results.append(result)
