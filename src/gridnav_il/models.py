@@ -188,7 +188,7 @@ class WaypointQueryAttentionPolicy(nn.Module):
             nn.Linear(128, 4),
         )
 
-    def forward(self, x):
+    def forward(self, x, return_attention: bool = False):
         batch_size = x.shape[0]
 
         x = self.conv(x)                    # [B, d_model, 4, 4]
@@ -199,11 +199,12 @@ class WaypointQueryAttentionPolicy(nn.Module):
 
         queries = self.waypoint_queries.expand(batch_size, -1, -1)
 
-        query_tokens, _ = self.cross_attention(
+        query_tokens, cross_attn_weights = self.cross_attention(
             query=self.query_norm(queries),
             key=self.token_norm(tokens),
             value=tokens,
-            need_weights=False,
+            need_weights=True,
+            average_attn_weights=False,
         )
 
         # Residual update.
@@ -211,7 +212,14 @@ class WaypointQueryAttentionPolicy(nn.Module):
 
         waypoint_outputs = self.waypoint_head(query_tokens)  # [B, num_waypoints, 4]
 
-        return waypoint_outputs.reshape(batch_size, self.output_dim)
+        out = waypoint_outputs.reshape(batch_size, self.output_dim)
+
+        if return_attention:
+            return out, {
+                "cross_attention": cross_attn_weights,
+            }
+
+        return out
 
 
 class TemporalWaypointQueryAttentionPolicy(nn.Module):
